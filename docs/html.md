@@ -1,13 +1,23 @@
 # scip-cli html
 
 `scip-cli html` adds a [SCIP](https://github.com/scip-code/scip) index and its
-source tree to a shared, static code browser. Symbol occurrences link directly
+source tree to a shared repository-intelligence site. Symbol occurrences link directly
 to their definitions, including definitions in other files. Repeated runs add
 or update repository commits in the same `web/` application.
 
 The output has no server-side runtime or framework. It uses clean history
 routes, loads source files on demand, and virtualizes source lines so very large
 files do not create a very large DOM.
+
+The primary product routes are:
+
+- `/`: current repository catalog;
+- `/vulnerabilities`: filterable potential-vulnerability review;
+- `/tasks`: running, pending, and recent documentation-agent work;
+- `/<repo>/<commit>/<path>`: source reading and symbol navigation.
+
+The vulnerability and task pages populate when the companion agent API and SSE
+service are available; the repository and source routes remain static.
 
 ## Build and run
 

@@ -5,25 +5,43 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light">
   <meta name="description" content="Static source browser generated from SCIP">
-  <link rel="stylesheet" href="assets/style.css">
+  <script>
+    (() => {
+      const match = location.pathname.match(/^(.*\/)(?:index|404)\.html$/);
+      const base = location.protocol === "file:" ? new URL("./", location.href).href : (match ? match[1] : "/");
+      window.__SCIP_APP_BASE__ = base;
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = `${base}assets/style.css`;
+      document.head.append(link);
+    })();
+  </script>
   <title>SCIP source browser</title>
 </head>
 <body>
   <header class="topbar">
-    <a id="home-link" class="home-link" href="/" title="All repositories" aria-label="Return to home">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7 3 12l5 5M16 7l5 5-5 5M14 4l-4 16"/></svg>
+    <a id="home-link" class="brand" href="/" aria-label="Source Atlas home">
+      <span class="brand-mark" aria-hidden="true">S</span>
+      <span>Source Atlas</span>
     </a>
-    <button id="menu" class="menu" aria-label="Toggle file browser">☰</button>
-    <div class="view-nav" aria-label="View navigation">
+    <nav class="primary-nav" aria-label="Primary navigation">
+      <a id="nav-repositories" href="/">Repositories</a>
+      <a id="nav-vulnerabilities" href="/vulnerabilities">Vulnerabilities</a>
+      <a id="nav-tasks" href="/tasks">Agent runs</a>
+    </nav>
+    <div class="header-context">
+      <button id="menu" class="menu" aria-label="Toggle repository files">☰</button>
+      <div class="view-nav" aria-label="View navigation" hidden>
       <button id="view-back" type="button" title="Back" aria-label="Back" disabled>←</button>
       <button id="view-forward" type="button" title="Forward" aria-label="Forward" disabled>→</button>
+      </div>
+      <div id="breadcrumb" class="breadcrumb">Repositories</div>
+      <div id="stats" class="stats"></div>
+      <button id="agent-toggle" class="agent-toggle" type="button" aria-label="Open agent runs">
+        <i id="agent-indicator" aria-hidden="true"></i>
+        <span id="agent-toggle-label">Agent offline</span>
+      </button>
     </div>
-    <div class="workspace-title">
-      <span class="product-name">Source Atlas</span>
-      <span class="title-divider" aria-hidden="true">/</span>
-      <div id="breadcrumb" class="breadcrumb">Loading workspace…</div>
-    </div>
-    <div id="stats" class="stats"></div>
   </header>
   <div class="layout">
     <aside id="sidebar" class="sidebar">
@@ -66,12 +84,64 @@
       <div id="history-list" class="history-list"></div>
     </aside>
   </div>
-  <footer class="workbench-status" aria-label="Editor status">
+  <aside id="agent-panel" class="agent-panel" aria-label="Codex documentation tasks" hidden>
+    <div class="agent-panel-head">
+      <div>
+        <span class="agent-kicker">Codex SDK</span>
+        <strong>Documentation tasks</strong>
+      </div>
+      <div class="agent-head-actions">
+        <button id="agent-run" type="button">Run now</button>
+        <button id="agent-close" type="button" aria-label="Close task panel">×</button>
+      </div>
+    </div>
+    <div class="agent-summary">
+      <span id="agent-state">Connecting…</span>
+      <span id="agent-usage"></span>
+    </div>
+    <div class="agent-tabs" role="tablist" aria-label="Agent details">
+      <button id="agent-tasks-tab" class="active" type="button" role="tab" aria-selected="true">Tasks</button>
+      <button id="agent-bugs-tab" type="button" role="tab" aria-selected="false">Potential bugs <span id="agent-bug-count">0</span></button>
+    </div>
+    <div id="agent-tasks-view" class="agent-view" role="tabpanel">
+      <section class="agent-task-section">
+        <div class="agent-section-head"><span>Running</span><span id="agent-running-count">0</span></div>
+        <div id="agent-running-list" class="agent-task-list compact"></div>
+      </section>
+      <section class="agent-task-section">
+        <div class="agent-section-head"><span>Pending</span><span id="agent-pending-count">0</span></div>
+        <div id="agent-pending-list" class="agent-task-list compact"></div>
+      </section>
+      <section class="agent-task-section">
+        <div class="agent-section-head"><span>Recent</span><span id="agent-recent-count">0</span></div>
+        <div id="agent-recent-list" class="agent-task-list compact"></div>
+      </section>
+    </div>
+    <div id="agent-bugs-view" class="agent-view" role="tabpanel" hidden>
+      <div id="agent-bug-list" class="agent-bug-list"></div>
+    </div>
+    <div class="agent-log-head"><span>Live log</span><span id="agent-log-state">Waiting for events</span></div>
+    <div id="agent-log" class="agent-log" role="log" aria-live="polite"></div>
+  </aside>
+  <footer class="workbench-status" aria-label="Source status" hidden>
     <div class="status-left"><span><i class="status-dot" aria-hidden="true"></i> SCIP index ready</span></div>
     <div class="status-right"><span id="position-status">Ln 1, Col 1</span><span id="language-status">SCIP</span><span>Read only</span></div>
   </footer>
   <div id="status" class="status" role="status" aria-live="polite"></div>
-  <script src="generated/catalog.js"></script>
-  <script src="assets/app.js" defer></script>
+  <script>
+    (() => {
+      const base = window.__SCIP_APP_BASE__ || "/";
+      const app = () => {
+        const script = document.createElement("script");
+        script.src = `${base}assets/app.js`;
+        document.body.append(script);
+      };
+      const catalog = document.createElement("script");
+      catalog.src = `${base}generated/catalog.js`;
+      catalog.onload = app;
+      catalog.onerror = app;
+      document.body.append(catalog);
+    })();
+  </script>
 </body>
 </html>
