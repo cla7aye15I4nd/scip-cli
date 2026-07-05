@@ -37,7 +37,7 @@ commands:
     run: >-
       gn gen {build_dir}
       --args='is_debug=false is_component_build=false symbol_level=0 v8_symbol_level=0 clang_use_chrome_plugins=false'
-      --export-compile-commands
+      --export-compile-commands=d8
 
   - name: Build V8 and generated sources
     cwd: "{repo_dir}"
