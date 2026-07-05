@@ -18,11 +18,11 @@
     "agent-toggle", "agent-indicator", "agent-toggle-label", "agent-panel", "agent-close",
     "agent-run", "agent-state", "agent-usage", "agent-tasks-tab", "agent-bugs-tab", "agent-bug-count",
     "agent-tasks-view", "agent-bugs-view", "agent-running-count", "agent-pending-count", "agent-recent-count",
-    "agent-running-list", "agent-pending-list", "agent-recent-list", "agent-bug-list", "agent-log", "agent-log-state"
+    "agent-running-list", "agent-pending-list", "agent-recent-list", "agent-bug-list", "agent-log", "agent-log-state",
+    "build-status", "build-button", "backend-error", "backend-error-message", "backend-error-dismiss"
   ].map(id => [id, document.getElementById(id)]));
   const nav = {
     code: document.getElementById("nav-code"),
-    repositories: document.getElementById("nav-repositories"),
     vulnerabilities: document.getElementById("nav-vulnerabilities"),
     tasks: document.getElementById("nav-tasks")
   };
@@ -30,7 +30,6 @@
     const home = fileMode ? location.pathname : appRoot.pathname;
     els["home-link"].href = home;
     nav.code.href = "#/";
-    nav.repositories.href = "#/repositories";
     nav.vulnerabilities.href = "#/vulnerabilities";
     nav.tasks.href = "#/tasks";
   }
@@ -56,7 +55,9 @@
   let agentConnected = false;
   let selectedAgentTask = "";
   let repositorySync;
+  let repositoryBuild;
   let panelResize;
+  let backendErrorVisible = false;
 
   const DOC_WIDTH_KEY = "scip-doc-panel-width";
   const DEFAULT_DOC_WIDTH = 330;
@@ -95,14 +96,14 @@
     } catch (_) {
       return { invalid: true };
     }
-    const page = ["repositories", "vulnerabilities", "tasks"].includes(parts[0])
-      ? parts[0]
-      : parts[0] ? "repository" : "home";
+    const scopedPage = ["vulnerabilities", "tasks"].includes(parts[2]) ? parts[2] : "";
+    const globalPage = ["vulnerabilities", "tasks"].includes(parts[0]) ? parts[0] : "";
+    const page = scopedPage || globalPage || (parts[0] ? "repository" : "repositories");
     return {
       page,
-      slug: parts[0] || "",
-      commit: parts[1] || "",
-      filePath: parts.slice(2).join("/"),
+      slug: scopedPage || !globalPage ? (parts[0] || "") : "",
+      commit: scopedPage || !globalPage ? (parts[1] || "") : "",
+      filePath: scopedPage ? "" : parts.slice(2).join("/"),
       line: Math.max(0, Number(params.get("line") || 0)),
       character: Math.max(0, Number(params.get("char") || 0)),
       hasCharacter: params.has("char")
@@ -110,8 +111,7 @@
   }
 
   function setActiveNavigation(page) {
-    nav.code.classList.toggle("active", page === "repository" || page === "home");
-    nav.repositories.classList.toggle("active", page === "repositories");
+    nav.code.classList.toggle("active", page === "repository");
     nav.vulnerabilities.classList.toggle("active", page === "vulnerabilities");
     nav.tasks.classList.toggle("active", page === "tasks");
   }
@@ -146,6 +146,34 @@
     els.status.classList.add("visible");
     clearTimeout(statusTimer);
     statusTimer = setTimeout(() => els.status.classList.remove("visible"), 2200);
+  }
+
+  function showBackendError(message = "ExpVuln could not reach the agent service. The code browser remains available.") {
+    els["backend-error-message"].textContent = message;
+    els["backend-error"].hidden = false;
+    backendErrorVisible = true;
+  }
+
+  function clearBackendError() {
+    if (!backendErrorVisible) return;
+    els["backend-error"].hidden = true;
+    backendErrorVisible = false;
+  }
+
+  const scopedUrl = page => manifest
+    ? `${projectRoot()}${page}`
+    : (routeMode ? `#/${page}` : `/${page}`);
+
+  function updateContextNavigation() {
+    const available = Boolean(manifest);
+    document.querySelector(".primary-nav").classList.toggle("contextless", !available);
+    els["build-status"].hidden = !available;
+    els["build-button"].hidden = !available;
+    if (!available) return;
+    const firstFile = manifest.files[0];
+    nav.code.href = firstFile ? fileUrl(firstFile) : projectRoot();
+    nav.vulnerabilities.href = scopedUrl("vulnerabilities");
+    nav.tasks.href = scopedUrl("tasks");
   }
 
   function clearFunctionDocs(message = "Choose a source file to view its function documentation.") {
@@ -325,7 +353,9 @@
   }
 
   function renderAgentPanel() {
-    const tasks = [...agentTasks.values()].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    const repo = manifest?.repoSlug;
+    const tasks = [...agentTasks.values()].filter(task => !repo || task.repo === repo)
+      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
     const running = tasks.filter(task => task.state === "running" || task.state === "preparing");
     const pending = tasks.filter(task => task.state === "queued" || task.state === "paused");
     const recent = tasks.filter(task => ["completed", "failed", "partial"].includes(task.state));
@@ -419,7 +449,8 @@
   }
 
   function renderBugList() {
-    const bugs = [...agentBugs.values()].sort((a, b) => {
+    const repo = manifest?.repoSlug;
+    const bugs = [...agentBugs.values()].filter(bug => !repo || bug.repo === repo).sort((a, b) => {
       const rank = { critical: 0, high: 1, medium: 2, low: 3 };
       return (rank[a.severity] ?? 4) - (rank[b.severity] ?? 4) || Number(b.confidence || 0) - Number(a.confidence || 0);
     });
@@ -506,11 +537,13 @@
     const source = new EventSource(new URL("api/events", appRoot));
     source.addEventListener("open", () => {
       agentConnected = true;
+      clearBackendError();
       renderAgentPanel();
       refreshStandalonePage();
     });
     source.addEventListener("error", () => {
       agentConnected = false;
+      showBackendError();
       renderAgentPanel();
       refreshStandalonePage();
     });
@@ -521,6 +554,8 @@
       agentBugs.clear();
       for (const bug of data.bugs || []) agentBugs.set(bug.id, bug);
       repositorySync = data.repositorySync;
+      if (repositoryBuild) repositoryBuild.sync = repositorySync;
+      renderBuildStatus();
       agentConnected = true;
       renderAgentPanel();
       refreshStandalonePage();
@@ -548,7 +583,11 @@
     });
     source.addEventListener("state", event => {
       const data = JSON.parse(event.data);
-      if (data.repositorySync) repositorySync = data.repositorySync;
+      if (data.repositorySync) {
+        repositorySync = data.repositorySync;
+        if (repositoryBuild) repositoryBuild.sync = repositorySync;
+        renderBuildStatus();
+      }
       renderAgentPanel();
       refreshStandalonePage();
     });
@@ -702,6 +741,8 @@
     currentProject = "";
     currentId = -1;
     currentData = undefined;
+    repositoryBuild = undefined;
+    updateContextNavigation();
     els.sidebar.hidden = true;
     els["doc-panel"].hidden = true;
     els["view-history"].hidden = true;
@@ -797,14 +838,12 @@
     els.stats.textContent = `${catalog.projects.length.toLocaleString()} projects`;
     els["position-status"].textContent = "Ln 1, Col 1";
     els["language-status"].textContent = "SCIP";
-    document.title = "Repositories · Source Atlas";
+    document.title = "Repositories · ExpVuln";
   }
 
   function prepareStandalonePage(page, breadcrumb, title) {
     setActiveNavigation(page);
     els.menu.hidden = true;
-    manifest = undefined;
-    currentProject = "";
     currentId = -1;
     currentData = undefined;
     clearFunctionDocs();
@@ -816,9 +855,9 @@
     els.empty.hidden = false;
     els.empty.className = "empty landing";
     els.empty.replaceChildren();
-    els.breadcrumb.textContent = breadcrumb;
+    els.breadcrumb.textContent = manifest ? `${repositoryLabel(manifest.repoSlug)} / ${breadcrumb}` : breadcrumb;
     els.stats.textContent = "";
-    document.title = `${title} · Source Atlas`;
+    document.title = `${title} · ExpVuln`;
     const pageRoot = document.createElement("section");
     pageRoot.className = "product-page";
     els.empty.append(pageRoot);
@@ -848,7 +887,7 @@
     const name = document.createElement("span");
     name.textContent = label;
     const number = document.createElement("strong");
-    number.textContent = Number(value).toLocaleString();
+    number.textContent = typeof value === "number" ? value.toLocaleString() : String(value);
     card.append(name, number);
     return card;
   }
@@ -856,6 +895,54 @@
   function repositoryLabel(slug) {
     const project = catalog?.projects?.find(item => item.slug === slug);
     return project?.repoUrl?.replace(/\/$/, "").split("/").pop() || slug || "Unknown repository";
+  }
+
+  function renderBuildStatus() {
+    if (!manifest || !repositoryBuild) return;
+    const sync = repositoryBuild.sync;
+    const building = sync?.state === "running" && (!sync.repository || sync.repository === repositoryBuild.profile);
+    const state = building ? "building" : repositoryBuild.isLatest ? "current" : "stale";
+    els["build-status"].className = `build-status ${state}`;
+    els["build-status"].querySelector("span").textContent = building
+      ? "Building latest commit"
+      : repositoryBuild.isLatest ? "Latest commit indexed" : "Index is behind";
+    els["build-button"].disabled = building;
+    els["build-button"].textContent = building ? "Build running…" : "Pull & rebuild";
+  }
+
+  async function loadRepositoryBuildStatus() {
+    if (!manifest) return;
+    try {
+      const response = await fetch(new URL(`api/repositories/${encodeURIComponent(manifest.repoSlug)}/status`, appRoot), { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      repositoryBuild = await response.json();
+      clearBackendError();
+      renderBuildStatus();
+      const route = parseRoute();
+      if (route.page === "repository" && !route.filePath) showProjectHome();
+      else refreshStandalonePage();
+    } catch (_) {
+      els["build-status"].className = "build-status offline";
+      els["build-status"].querySelector("span").textContent = "Build status unavailable";
+      showBackendError("The frontend is online, but build status and agent actions are unavailable because the backend cannot be reached.");
+    }
+  }
+
+  async function requestRepositoryBuild() {
+    if (!manifest) return;
+    els["build-button"].disabled = true;
+    try {
+      const response = await fetch(new URL(`api/repositories/${encodeURIComponent(manifest.repoSlug)}/build`, appRoot), { method: "POST" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      repositoryBuild = { ...(repositoryBuild || {}), sync: { state: "running", repository: repositoryBuild?.profile,
+        message: "Build queued behind the active documentation cycle" } };
+      renderBuildStatus();
+      status(`Build requested for ${repositoryLabel(manifest.repoSlug)}`);
+      clearBackendError();
+    } catch (_) {
+      els["build-button"].disabled = false;
+      showBackendError("ExpVuln could not start the repository build. Check that the agent backend is running and try again.");
+    }
   }
 
   function showVulnerabilities() {
@@ -866,14 +953,15 @@
       "Vulnerabilities",
       "Review possible defects separately from source browsing. Prioritize by severity and verification status, then jump to the exact source location."
     );
-    const allBugs = [...agentBugs.values()];
+    const repo = manifest?.repoSlug;
+    const allBugs = [...agentBugs.values()].filter(bug => !repo || bug.repo === repo);
     const metrics = document.createElement("div");
     metrics.className = "metric-grid";
     metrics.append(
       metricCard("Total findings", allBugs.length),
       metricCard("Critical & high", allBugs.filter(bug => ["critical", "high"].includes(String(bug.severity).toLowerCase())).length, "danger"),
       metricCard("Unverified", allBugs.filter(bug => (bug.verification?.status || "unverified") === "unverified").length, "warning"),
-      metricCard("Repositories", new Set(allBugs.map(bug => bug.repo)).size)
+      metricCard("Indexed commit", manifest?.commit?.slice(0, 7) || "—")
     );
     root.append(metrics);
 
@@ -947,7 +1035,7 @@
         empty.textContent = allBugs.length
           ? "No findings match these filters."
           : agentConnected
-            ? "No potential vulnerabilities have been reported for current repositories."
+            ? "No potential vulnerabilities have been reported for this repository."
             : "Connect the documentation agent to load potential vulnerabilities.";
         fragment.append(empty);
       }
@@ -1004,8 +1092,9 @@
       const response = await fetch(new URL("api/run", appRoot), { method: "POST" });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       status("Documentation cycle requested");
+      clearBackendError();
     } catch (_) {
-      status("Documentation agent is not available");
+      showBackendError("ExpVuln could not start a documentation cycle because the agent backend is unavailable.");
     }
   }
 
@@ -1023,7 +1112,9 @@
       "Follow active documentation work, understand what is waiting, and review recently completed functions.",
       action
     );
-    const tasks = [...agentTasks.values()].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    const repo = manifest?.repoSlug;
+    const tasks = [...agentTasks.values()].filter(task => !repo || task.repo === repo)
+      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
     const running = tasks.filter(task => ["running", "preparing"].includes(task.state));
     const pending = tasks.filter(task => ["queued", "paused"].includes(task.state));
     const recent = tasks.filter(task => ["completed", "failed", "partial"].includes(task.state));
@@ -1242,12 +1333,51 @@
     currentId = -1;
     currentData = undefined;
     clearFunctionDocs();
+    els.sidebar.hidden = true;
+    els["doc-panel"].hidden = true;
+    els["view-history"].hidden = true;
+    els.main.parentElement.classList.add("landing-mode");
     els.editor.hidden = true;
     els.empty.hidden = false;
-    els.empty.className = "empty";
-    els.empty.textContent = "Choose a file to browse its source.";
+    els.empty.className = "empty landing";
+    els.empty.replaceChildren();
+    const root = document.createElement("section");
+    root.className = "product-page repository-home";
+    const firstFile = manifest.files[0];
+    const action = document.createElement("a");
+    action.className = "page-action primary";
+    action.href = firstFile ? fileUrl(firstFile) : projectRoot();
+    action.textContent = "Browse code →";
+    appendPageHero(root, "Repository", repositoryLabel(manifest.repoSlug), manifest.repoUrl, action);
+    const metrics = document.createElement("div");
+    metrics.className = "metric-grid";
+    metrics.append(
+      metricCard("Indexed files", manifest.fileCount),
+      metricCard("Symbol links", manifest.occurrenceCount),
+      metricCard("Indexed commit", manifest.commit.slice(0, 7)),
+      metricCard("Build", repositoryBuild ? (repositoryBuild.isLatest ? "Current" : "Behind") : "Checking…")
+    );
+    root.append(metrics);
+    const build = document.createElement("section");
+    build.className = "repository-build-card";
+    const copy = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = repositoryBuild?.isLatest ? "Index matches the latest commit" : "Repository build status";
+    const detail = document.createElement("p");
+    detail.textContent = repositoryBuild
+      ? `Indexed ${repositoryBuild.indexedCommit.slice(0, 12)} · Latest ${repositoryBuild.latestCommit.slice(0, 12) || "unavailable"}`
+      : "Checking the indexed commit against the remote repository…";
+    copy.append(title, detail);
+    const button = document.createElement("button");
+    button.className = "page-action";
+    button.type = "button";
+    button.textContent = repositoryBuild?.isLatest ? "Rebuild" : "Pull latest & rebuild";
+    button.addEventListener("click", requestRepositoryBuild);
+    build.append(copy, button);
+    root.append(build);
+    els.empty.append(root);
     els.breadcrumb.textContent = manifest.repoUrl;
-    document.title = manifest.title;
+    document.title = `${repositoryLabel(manifest.repoSlug)} · ExpVuln`;
     els["position-status"].textContent = "Ln 1, Col 1";
     els["language-status"].textContent = "SCIP";
     renderFileList(els.search.value);
@@ -1259,25 +1389,17 @@
       showLanding();
       return;
     }
-    if (target.page === "home") {
+    if (["vulnerabilities", "tasks"].includes(target.page) && !target.slug) {
       const project = catalog.projects.find(item => /ffmpeg/i.test(item.repoUrl)) || catalog.projects[0];
       const revision = project?.commits[0];
       if (!project || !revision) {
         showLanding();
         return;
       }
-      navigate(`${routeMode ? "#/" : "/"}${encodeURIComponent(project.slug)}/${encodeURIComponent(revision.commit)}/`, true);
+      navigate(`${routeMode ? "#/" : "/"}${encodeURIComponent(project.slug)}/${encodeURIComponent(revision.commit)}/${target.page}`, true);
       return;
     }
-    if (target.page === "vulnerabilities") {
-      showVulnerabilities();
-      return;
-    }
-    if (target.page === "tasks") {
-      showTasks();
-      return;
-    }
-    setActiveNavigation("repository");
+    setActiveNavigation(target.page);
     els.menu.hidden = false;
     const project = catalog.projects.find(item => item.slug === target.slug);
     const revision = project?.commits.find(item => item.commit === target.commit);
@@ -1310,16 +1432,26 @@
         els.main.parentElement.classList.remove("landing-mode");
         els.stats.textContent = `${manifest.fileCount.toLocaleString()} files · ${manifest.occurrenceCount.toLocaleString()} symbols`;
         renderFileList();
+        updateContextNavigation();
+        loadRepositoryBuildStatus();
+      }
+      updateContextNavigation();
+      if (target.page === "vulnerabilities") {
+        showVulnerabilities();
+        return;
+      }
+      if (target.page === "tasks") {
+        showTasks();
+        return;
       }
       if (!target.filePath) {
-        const firstFile = manifest.files[0];
-        if (firstFile) {
-          navigate(`${fileUrl(firstFile)}?line=0`, true);
-          return;
-        }
         showProjectHome();
         return;
       }
+      els.sidebar.hidden = false;
+      els["doc-panel"].hidden = false;
+      els["view-history"].hidden = false;
+      els.main.parentElement.classList.remove("landing-mode");
       const file = manifest.files.find(item => item.path === target.filePath);
       if (!file) throw new Error("file is not present in this index");
       if (file.id !== currentId) {
@@ -1412,8 +1544,10 @@
     renderViewHistory();
   });
   els["agent-toggle"].addEventListener("click", () => {
-    navigate(routeMode ? "#/tasks" : "/tasks");
+    navigate(scopedUrl("tasks"));
   });
+  els["build-button"].addEventListener("click", requestRepositoryBuild);
+  els["backend-error-dismiss"].addEventListener("click", clearBackendError);
   els["agent-close"].addEventListener("click", () => {
     els["agent-panel"].hidden = true;
     els["agent-toggle"].setAttribute("aria-expanded", "false");
@@ -1486,6 +1620,6 @@
   renderAgentPanel();
   initializeAgentMonitor();
   const startupParams = new URLSearchParams(location.search);
-  if (startupParams.get("agent") === "1") navigate(routeMode ? "#/tasks" : "/tasks", true);
+  if (startupParams.get("agent") === "1") navigate(scopedUrl("tasks"), true);
   start();
 })();

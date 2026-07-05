@@ -73,6 +73,10 @@ enum Commands {
     },
     /// Generate SCIP indexes and add every configured repository to one website.
     GenerateAll {
+        /// Generate only this repository profile.
+        #[arg(long)]
+        repository: Option<String>,
+
         /// Shared website root containing index.html and generated project data.
         #[arg(long, default_value = "web")]
         web_root: PathBuf,
@@ -195,6 +199,7 @@ fn run() -> Result<()> {
             }
         }
         Commands::GenerateAll {
+            repository,
             web_root,
             output_dir,
             work_dir,
@@ -207,6 +212,7 @@ fn run() -> Result<()> {
             let config_dir = resolve_config_dir(configured_dir.as_deref())?;
             generate_all(
                 &config_dir,
+                repository.as_deref(),
                 web_root,
                 GenerateOptions {
                     output_dir,
@@ -250,11 +256,17 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn generate_all(config_dir: &Path, web_root: PathBuf, options: GenerateOptions) -> Result<()> {
+fn generate_all(config_dir: &Path, repository: Option<&str>, web_root: PathBuf, options: GenerateOptions) -> Result<()> {
     if options.jobs == 0 || options.index_jobs == 0 {
         anyhow::bail!("--jobs and --index-jobs must be greater than zero");
     }
-    let profiles = load_profiles(config_dir)?;
+    let mut profiles = load_profiles(config_dir)?;
+    if let Some(name) = repository {
+        profiles.retain(|(_, profile)| profile.name == name);
+        if profiles.is_empty() {
+            anyhow::bail!("no repository profile named '{name}'");
+        }
+    }
     if profiles.is_empty() {
         anyhow::bail!("no repository profiles found in {}", config_dir.display());
     }

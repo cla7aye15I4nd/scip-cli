@@ -16,17 +16,16 @@
       document.head.append(link);
     })();
   </script>
-  <title>SCIP source browser</title>
+  <title>ExpVuln</title>
 </head>
 <body>
   <header class="topbar">
-    <a id="home-link" class="brand" href="/" aria-label="Source Atlas home">
-      <span class="brand-mark" aria-hidden="true">S</span>
-      <span>Source Atlas</span>
+    <a id="home-link" class="brand" href="/" aria-label="ExpVuln home">
+      <span class="brand-mark" aria-hidden="true">E</span>
+      <span>ExpVuln</span>
     </a>
     <nav class="primary-nav" aria-label="Primary navigation">
       <a id="nav-code" href="/">Code</a>
-      <a id="nav-repositories" href="/repositories">Repositories</a>
       <a id="nav-vulnerabilities" href="/vulnerabilities">Vulnerabilities</a>
       <a id="nav-tasks" href="/tasks">Agent runs</a>
     </nav>
@@ -38,6 +37,8 @@
       </div>
       <div id="breadcrumb" class="breadcrumb">Repositories</div>
       <div id="stats" class="stats"></div>
+      <div id="build-status" class="build-status" hidden><i></i><span>Checking build</span></div>
+      <button id="build-button" class="build-button" type="button" hidden>Pull &amp; rebuild</button>
       <button id="agent-toggle" class="agent-toggle" type="button" aria-label="Open agent runs">
         <i id="agent-indicator" aria-hidden="true"></i>
         <span id="agent-toggle-label">Agent offline</span>
@@ -129,6 +130,13 @@
     <div class="status-right"><span id="position-status">Ln 1, Col 1</span><span id="language-status">SCIP</span><span>Read only</span></div>
   </footer>
   <div id="status" class="status" role="status" aria-live="polite"></div>
+  <div id="backend-error" class="error-overlay" role="alertdialog" aria-modal="true" aria-labelledby="backend-error-title" hidden>
+    <div class="error-dialog">
+      <span class="error-icon" aria-hidden="true">!</span>
+      <div><strong id="backend-error-title">Backend unavailable</strong><p id="backend-error-message">ExpVuln could not reach the agent service. The code browser remains available.</p></div>
+      <button id="backend-error-dismiss" type="button">Dismiss</button>
+    </div>
+  </div>
   <script>
     (() => {
       const base = window.__SCIP_APP_BASE__ || "/";
