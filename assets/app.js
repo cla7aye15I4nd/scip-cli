@@ -6,17 +6,18 @@
   ) || 22;
   const OVERSCAN = 60;
   const MAX_FILE_RESULTS = 400;
+  const MAX_VIEW_HISTORY = 80;
   const fileMode = location.protocol === "file:";
   const appRoot = new URL("../", document.currentScript.src);
   const routeMode = fileMode || appRoot.pathname !== "/";
   const els = Object.fromEntries([
-    "menu", "home-link", "explorer-home", "sidebar", "search", "file-list", "file-note", "breadcrumb",
+    "menu", "explorer-home", "sidebar", "search", "file-list", "file-note", "breadcrumb",
     "stats", "main", "empty", "editor", "file-name", "file-meta", "code",
-    "code-spacer", "code-window", "status", "position-status", "language-status"
+    "code-spacer", "code-window", "status", "position-status", "language-status",
+    "view-back", "view-forward", "view-history", "history-list", "clear-history"
   ].map(id => [id, document.getElementById(id)]));
   if (routeMode) {
     const home = fileMode ? location.pathname : appRoot.pathname;
-    els["home-link"].href = home;
     els["explorer-home"].href = home;
   }
 
@@ -31,6 +32,8 @@
   let renderedEnd = -1;
   let pendingFrame = 0;
   let statusTimer = 0;
+  let viewHistory = [];
+  let viewHistoryCursor = -1;
 
   const encodePath = path => path.split("/").map(encodeURIComponent).join("/");
   const projectRoot = () => `${routeMode ? "#/" : "/"}${encodeURIComponent(manifest.repoSlug)}/${encodeURIComponent(manifest.commit)}/`;
@@ -87,12 +90,82 @@
     statusTimer = setTimeout(() => els.status.classList.remove("visible"), 2200);
   }
 
+  function renderViewHistory() {
+    const fragment = document.createDocumentFragment();
+    for (let index = viewHistory.length - 1; index >= 0; index--) {
+      const view = viewHistory[index];
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `history-entry${index === viewHistoryCursor ? " current" : ""}${index > viewHistoryCursor ? " future" : ""}`;
+      button.dataset.historyIndex = index;
+      button.title = `${view.path}:${view.line + 1}`;
+      const graph = document.createElement("span");
+      graph.className = "history-graph";
+      const node = document.createElement("span");
+      node.className = "history-node";
+      graph.append(node);
+      const copy = document.createElement("span");
+      copy.className = "history-copy";
+      const name = document.createElement("strong");
+      name.textContent = view.path.split("/").pop();
+      const location = document.createElement("small");
+      location.textContent = `${view.path} · line ${view.line + 1}`;
+      copy.append(name, location);
+      button.append(graph, copy);
+      fragment.append(button);
+    }
+    if (!viewHistory.length) {
+      const empty = document.createElement("p");
+      empty.className = "history-empty";
+      empty.textContent = "Open a source location to start a view trail.";
+      fragment.append(empty);
+    }
+    els["history-list"].replaceChildren(fragment);
+    els["view-back"].disabled = viewHistoryCursor <= 0;
+    els["view-forward"].disabled = viewHistoryCursor < 0 || viewHistoryCursor >= viewHistory.length - 1;
+    els["clear-history"].disabled = viewHistory.length === 0;
+  }
+
+  function recordView(target, file) {
+    const key = `${target.slug}/${target.commit}/${file.path}?line=${target.line}&char=${target.character}`;
+    if (viewHistory[viewHistoryCursor]?.key === key) {
+      renderViewHistory();
+      return;
+    }
+    if (viewHistory[viewHistoryCursor - 1]?.key === key) {
+      viewHistoryCursor--;
+    } else if (viewHistory[viewHistoryCursor + 1]?.key === key) {
+      viewHistoryCursor++;
+    } else {
+      viewHistory.splice(viewHistoryCursor + 1);
+      viewHistory.push({
+        key,
+        url: `${fileUrl(file)}?line=${target.line}&char=${target.character}`,
+        path: file.path,
+        line: target.line
+      });
+      if (viewHistory.length > MAX_VIEW_HISTORY) viewHistory.shift();
+      viewHistoryCursor = viewHistory.length - 1;
+    }
+    els["view-history"].hidden = false;
+    renderViewHistory();
+  }
+
+  function moveViewHistory(offset) {
+    const next = viewHistoryCursor + offset;
+    if (next < 0 || next >= viewHistory.length) return;
+    viewHistoryCursor = next;
+    renderViewHistory();
+    navigate(viewHistory[next].url);
+  }
+
   function showLanding() {
     manifest = undefined;
     currentProject = "";
     currentId = -1;
     currentData = undefined;
     els.sidebar.hidden = true;
+    els["view-history"].hidden = true;
     els.main.parentElement.classList.add("landing-mode");
     els.editor.hidden = true;
     els.empty.hidden = false;
@@ -328,6 +401,7 @@
     const revision = project?.commits.find(item => item.commit === target.commit);
     if (!project || !revision) {
       els.sidebar.hidden = true;
+      els["view-history"].hidden = true;
       els.editor.hidden = true;
       els.empty.hidden = false;
       els.empty.className = "empty";
@@ -388,6 +462,7 @@
       centerLine(target.line);
       els["position-status"].textContent = `Ln ${target.line + 1}, Col ${target.character + 1}`;
       renderWindow(true);
+      recordView(target, file);
       const activeFile = document.querySelector(`.file-link[data-file-id="${file.id}"]`);
       if (activeFile) {
         const list = els["file-list"];
@@ -440,9 +515,26 @@
     if (event.key === "Enter") els["file-list"].querySelector("a")?.click();
   });
   els.menu.addEventListener("click", () => els.sidebar.classList.toggle("open"));
+  els["view-back"].addEventListener("click", () => moveViewHistory(-1));
+  els["view-forward"].addEventListener("click", () => moveViewHistory(1));
+  els["clear-history"].addEventListener("click", () => {
+    viewHistory = [];
+    viewHistoryCursor = -1;
+    renderViewHistory();
+  });
+  els["history-list"].addEventListener("click", event => {
+    const entry = event.target.closest(".history-entry");
+    if (!entry) return;
+    const index = Number(entry.dataset.historyIndex);
+    if (!Number.isInteger(index) || !viewHistory[index]) return;
+    viewHistoryCursor = index;
+    renderViewHistory();
+    navigate(viewHistory[index].url);
+  });
   els.code.addEventListener("scroll", scheduleWindow, { passive: true });
   window.addEventListener("resize", scheduleWindow, { passive: true });
   window.addEventListener("popstate", openRoute);
   window.addEventListener("hashchange", openRoute);
+  renderViewHistory();
   start();
 })();
