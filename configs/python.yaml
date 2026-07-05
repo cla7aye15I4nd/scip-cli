@@ -21,10 +21,9 @@ commands:
     run: |
       mkdir -p "{repo_dir}/{build_dir}"
       cd "{repo_dir}/{build_dir}"
-      "{repo_dir}/{configure_script}" {configure_args}
+      CC="ccache clang" CXX="ccache clang++" "{repo_dir}/{configure_script}" {configure_args}
 
   - name: Build and capture the compilation database
     cwd: "{repo_dir}/{build_dir}"
     run: |
-      make clean
-      bear -o "{repo_dir}/{build_dir}/compile_commands.json" -- make -j{jobs} {make_args}
+      bear --append -o "{repo_dir}/{build_dir}/compile_commands.json" -- make -j{jobs} {make_args}

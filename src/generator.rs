@@ -69,14 +69,27 @@ impl Generator {
 
     pub fn run(mut self) -> Result<PathBuf> {
         self.prepare_directories()?;
+        let checkout_changed = self.clone_repository()?;
+        let output = self.output_path()?;
+        let cache_key = self.cache_key()?;
+        if self.cached_index_is_current(&output, &cache_key, checkout_changed)? {
+            println!("==> Reusing unchanged SCIP index {}", output.display());
+            if !self.options.dry_run {
+                fs::write(self.cache_path(), &cache_key)?;
+            }
+            return Ok(output);
+        }
         self.ensure_tools()?;
-        self.clone_repository()?;
         if !self.options.skip_build {
             self.run_commands()?;
         } else {
             println!("==> Skipping configured build commands");
         }
-        self.run_indexer()
+        let output = self.run_indexer()?;
+        if !self.options.dry_run {
+            fs::write(self.cache_path(), cache_key)?;
+        }
+        Ok(output)
     }
 
     fn prepare_directories(&self) -> Result<()> {
@@ -86,7 +99,29 @@ impl Generator {
         fs::create_dir_all(&self.options.output_dir)?;
         fs::create_dir_all(&self.options.work_dir)?;
         fs::create_dir_all(&self.options.tools_dir)?;
+        fs::create_dir_all(self.options.tools_dir.join("ccache"))?;
         Ok(())
+    }
+
+    fn cache_key(&self) -> Result<String> {
+        let commit = git_head(&self.repo_dir)?;
+        let profile = serde_json::to_string(&self.profile)?;
+        Ok(format!("scip-clang={SCIP_CLANG_VERSION}\ncommit={commit}\nprofile={profile}\n"))
+    }
+
+    fn cache_path(&self) -> PathBuf {
+        self.options.output_dir.join(format!(".{}.scip-cache", self.profile.name))
+    }
+
+    fn cached_index_is_current(&self, output: &Path, key: &str, checkout_changed: bool) -> Result<bool> {
+        if self.options.dry_run || !output.is_file() || fs::metadata(output)?.len() < 1024 {
+            return Ok(false);
+        }
+        match fs::read_to_string(self.cache_path()) {
+            Ok(stored) => Ok(stored == key),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(!checkout_changed),
+            Err(error) => Err(error.into()),
+        }
     }
 
     fn ensure_tools(&mut self) -> Result<()> {
@@ -180,9 +215,10 @@ impl Generator {
         Ok(())
     }
 
-    fn clone_repository(&self) -> Result<()> {
+    fn clone_repository(&self) -> Result<bool> {
         let repository = self.variables.render(&self.profile.repository.url)?;
         let existing_checkout = self.repo_dir.join(".git").is_dir();
+        let previous_head = existing_checkout.then(|| git_head(&self.repo_dir)).transpose()?;
         if existing_checkout {
             println!("==> Using checkout {}", self.repo_dir.display());
         } else {
@@ -224,19 +260,26 @@ impl Generator {
                 Some(&self.repo_dir),
             )?;
         } else if existing_checkout {
-            println!("==> Pulling the latest upstream revision");
+            println!("==> Fetching the latest upstream revision");
             self.run_program(
                 "git",
                 &[
-                    "pull".into(),
-                    "--ff-only".into(),
+                    "fetch".into(),
                     "--depth".into(),
                     self.profile.repository.depth.to_string(),
+                    "origin".into(),
+                    "HEAD".into(),
                 ],
                 Some(&self.repo_dir),
             )?;
+            self.run_program(
+                "git",
+                &["checkout".into(), "--detach".into(), "FETCH_HEAD".into()],
+                Some(&self.repo_dir),
+            )?;
         }
-        Ok(())
+        let current_head = if self.options.dry_run { previous_head.clone() } else { Some(git_head(&self.repo_dir)?) };
+        Ok(!existing_checkout || previous_head != current_head)
     }
 
     fn run_commands(&self) -> Result<()> {
@@ -279,12 +322,7 @@ impl Generator {
         } else {
             self.repo_dir.join(rendered_compdb)
         };
-        let rendered_output = PathBuf::from(self.variables.render(&self.profile.index.output)?);
-        let output = if rendered_output.is_absolute() {
-            rendered_output
-        } else {
-            self.options.output_dir.join(rendered_output)
-        };
+        let output = self.output_path()?;
         if !output.starts_with(&self.options.output_dir) {
             bail!(
                 "profile output must remain under --output-dir: {}",
@@ -330,6 +368,15 @@ impl Generator {
         Ok(output)
     }
 
+    fn output_path(&self) -> Result<PathBuf> {
+        let rendered = PathBuf::from(self.variables.render(&self.profile.index.output)?);
+        let output = if rendered.is_absolute() { rendered } else { self.options.output_dir.join(rendered) };
+        if !output.starts_with(&self.options.output_dir) {
+            bail!("profile output must remain under --output-dir: {}", output.display());
+        }
+        Ok(output)
+    }
+
     fn run_program(&self, program: &str, args: &[String], cwd: Option<&Path>) -> Result<()> {
         let rendered = std::iter::once(program.to_owned())
             .chain(args.iter().cloned())
@@ -349,12 +396,27 @@ impl Generator {
     }
 
     fn apply_environment(&self, command: &mut Command) -> Result<()> {
-        if !self.path_entries.is_empty() {
+        let mut configured_entries = self.path_entries.clone();
+        let ccache_wrappers = PathBuf::from("/usr/lib/ccache");
+        if ccache_wrappers.is_dir() {
+            configured_entries.insert(0, ccache_wrappers);
+        }
+        if !configured_entries.is_empty() {
             let current = env::var_os("PATH").unwrap_or_default();
-            let mut entries = self.path_entries.clone();
+            let mut entries = configured_entries;
             entries.extend(env::split_paths(&current));
             let path = env::join_paths(entries)?;
             command.env("PATH", path);
+        }
+        if find_in_path("ccache").is_some() {
+            let cache_dir = env::var_os("CCACHE_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| self.options.tools_dir.join("ccache"));
+            command
+                .env("CCACHE_DIR", cache_dir)
+                .env("CCACHE_BASEDIR", &self.repo_dir)
+                .env("CCACHE_NOHASHDIR", "true")
+                .env("CCACHE_COMPILERCHECK", "content");
         }
         command
             .stdin(Stdio::inherit())
@@ -362,6 +424,17 @@ impl Generator {
             .stderr(Stdio::inherit());
         Ok(())
     }
+}
+
+fn git_head(repo_dir: &Path) -> Result<String> {
+    let output = Command::new("git")
+        .args(["-C", &path_string(repo_dir), "rev-parse", "HEAD"])
+        .output()
+        .with_context(|| format!("failed to inspect Git checkout {}", repo_dir.display()))?;
+    if !output.status.success() {
+        bail!("git rev-parse failed in {}", repo_dir.display());
+    }
+    Ok(String::from_utf8(output.stdout)?.trim().to_owned())
 }
 
 fn run_status(mut command: Command) -> Result<()> {

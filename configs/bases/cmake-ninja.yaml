@@ -12,6 +12,8 @@ commands:
     run: >-
       cmake -S "{repo_dir}/{source_dir}" -B "{repo_dir}/{build_dir}" -G Ninja
       -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+      -DCMAKE_C_COMPILER_LAUNCHER=ccache
+      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       {cmake_args}
 
   - name: Build CMake project and generated sources

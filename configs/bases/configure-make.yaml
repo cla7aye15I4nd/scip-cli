@@ -29,7 +29,7 @@ commands:
     run: |
       mkdir -p "{repo_dir}/{build_dir}"
       cd "{repo_dir}/{build_dir}"
-      "{repo_dir}/{configure_script}" {configure_args}
+      CC="ccache clang" CXX="ccache clang++" "{repo_dir}/{configure_script}" {configure_args}
 
   - name: Build and capture the compilation database
     cwd: "{repo_dir}/{build_dir}"

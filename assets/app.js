@@ -21,6 +21,7 @@
     "agent-running-list", "agent-pending-list", "agent-recent-list", "agent-bug-list", "agent-log", "agent-log-state"
   ].map(id => [id, document.getElementById(id)]));
   const nav = {
+    code: document.getElementById("nav-code"),
     repositories: document.getElementById("nav-repositories"),
     vulnerabilities: document.getElementById("nav-vulnerabilities"),
     tasks: document.getElementById("nav-tasks")
@@ -28,7 +29,8 @@
   if (routeMode) {
     const home = fileMode ? location.pathname : appRoot.pathname;
     els["home-link"].href = home;
-    nav.repositories.href = "#/";
+    nav.code.href = "#/";
+    nav.repositories.href = "#/repositories";
     nav.vulnerabilities.href = "#/vulnerabilities";
     nav.tasks.href = "#/tasks";
   }
@@ -93,7 +95,9 @@
     } catch (_) {
       return { invalid: true };
     }
-    const page = ["vulnerabilities", "tasks"].includes(parts[0]) ? parts[0] : parts[0] ? "repository" : "repositories";
+    const page = ["repositories", "vulnerabilities", "tasks"].includes(parts[0])
+      ? parts[0]
+      : parts[0] ? "repository" : "home";
     return {
       page,
       slug: parts[0] || "",
@@ -106,7 +110,8 @@
   }
 
   function setActiveNavigation(page) {
-    nav.repositories.classList.toggle("active", page === "repositories" || page === "repository");
+    nav.code.classList.toggle("active", page === "repository" || page === "home");
+    nav.repositories.classList.toggle("active", page === "repositories");
     nav.vulnerabilities.classList.toggle("active", page === "vulnerabilities");
     nav.tasks.classList.toggle("active", page === "tasks");
   }
@@ -1254,6 +1259,16 @@
       showLanding();
       return;
     }
+    if (target.page === "home") {
+      const project = catalog.projects.find(item => /ffmpeg/i.test(item.repoUrl)) || catalog.projects[0];
+      const revision = project?.commits[0];
+      if (!project || !revision) {
+        showLanding();
+        return;
+      }
+      navigate(`${routeMode ? "#/" : "/"}${encodeURIComponent(project.slug)}/${encodeURIComponent(revision.commit)}/`, true);
+      return;
+    }
     if (target.page === "vulnerabilities") {
       showVulnerabilities();
       return;
@@ -1297,6 +1312,11 @@
         renderFileList();
       }
       if (!target.filePath) {
+        const firstFile = manifest.files[0];
+        if (firstFile) {
+          navigate(`${fileUrl(firstFile)}?line=0`, true);
+          return;
+        }
         showProjectHome();
         return;
       }
