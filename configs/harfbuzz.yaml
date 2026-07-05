@@ -1,0 +1,14 @@
+extends: bases/cmake-ninja.yaml
+
+name: harfbuzz
+description: HarfBuzz text shaping engine
+
+repository:
+  url: https://github.com/harfbuzz/harfbuzz.git
+  directory: harfbuzz
+  depth: 1
+
+variables:
+  cmake_args: >-
+    -DCMAKE_BUILD_TYPE=Release
+    -DHB_BUILD_UTILS=OFF

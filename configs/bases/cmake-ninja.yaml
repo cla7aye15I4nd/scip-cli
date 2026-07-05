@@ -1,0 +1,28 @@
+version: 1
+
+variables:
+  source_dir: "."
+  build_dir: build-scip
+  cmake_args: "-DCMAKE_BUILD_TYPE=Release"
+  build_args: ""
+
+commands:
+  - name: Configure CMake project
+    cwd: "{repo_dir}"
+    run: >-
+      cmake -S "{repo_dir}/{source_dir}" -B "{repo_dir}/{build_dir}" -G Ninja
+      -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+      {cmake_args}
+
+  - name: Build CMake project and generated sources
+    cwd: "{repo_dir}"
+    run: >-
+      cmake --build "{repo_dir}/{build_dir}"
+      --parallel {jobs}
+      {build_args}
+
+index:
+  compilation_database: "{repo_dir}/{build_dir}/compile_commands.json"
+  output: "{output_dir}/{name}.scip"
+  arguments:
+    - --no-progress-report

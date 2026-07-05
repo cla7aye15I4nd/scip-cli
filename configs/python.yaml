@@ -1,0 +1,14 @@
+extends: bases/configure-make.yaml
+
+name: python
+description: CPython interpreter and standard-library extension modules
+
+repository:
+  url: https://github.com/python/cpython.git
+  directory: cpython
+  depth: 1
+
+variables:
+  configure_args: >-
+    --without-ensurepip
+    --disable-test-modules

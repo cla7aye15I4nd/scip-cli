@@ -1,0 +1,16 @@
+extends: bases/cmake-ninja.yaml
+
+name: dawn
+description: Dawn WebGPU implementation and Tint
+
+repository:
+  url: https://dawn.googlesource.com/dawn
+  directory: dawn
+  depth: 1
+
+variables:
+  build_dir: out/scip
+  cmake_args: >-
+    -DCMAKE_BUILD_TYPE=Release
+    -DDAWN_FETCH_DEPENDENCIES=ON
+    -DDAWN_ENABLE_INSTALL=OFF

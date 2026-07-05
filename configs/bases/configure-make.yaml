@@ -1,0 +1,44 @@
+version: 1
+
+variables:
+  build_dir: build-scip
+  bootstrap_command: ":"
+  configure_script: configure
+  configure_args: ""
+  make_args: ""
+  compiledb_venv: "{tools_dir}/compiledb-venv"
+  compiledb_version: "0.10.7"
+
+path_prepend:
+  - "{compiledb_venv}/bin"
+
+commands:
+  - name: Install the Make compilation-database helper
+    cwd: "{tools_dir}"
+    run: >-
+      test -x "{compiledb_venv}/bin/compiledb" ||
+      (python3 -m venv "{compiledb_venv}" &&
+      "{compiledb_venv}/bin/pip" install "compiledb=={compiledb_version}")
+
+  - name: Bootstrap configure scripts
+    cwd: "{repo_dir}"
+    run: "{bootstrap_command}"
+
+  - name: Configure Make project
+    cwd: "{repo_dir}"
+    run: |
+      mkdir -p "{repo_dir}/{build_dir}"
+      cd "{repo_dir}/{build_dir}"
+      "{repo_dir}/{configure_script}" {configure_args}
+
+  - name: Build and capture the compilation database
+    cwd: "{repo_dir}/{build_dir}"
+    run: >-
+      compiledb -o "{repo_dir}/{build_dir}/compile_commands.json"
+      make -j{jobs} {make_args}
+
+index:
+  compilation_database: "{repo_dir}/{build_dir}/compile_commands.json"
+  output: "{output_dir}/{name}.scip"
+  arguments:
+    - --no-progress-report
