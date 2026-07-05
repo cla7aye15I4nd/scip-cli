@@ -137,6 +137,10 @@ impl Profile {
         }
         Ok(())
     }
+
+    pub fn checkout_directory(&self) -> &str {
+        self.repository.directory.as_deref().unwrap_or(&self.name)
+    }
 }
 
 const RESERVED_VARIABLES: &[&str] = &[

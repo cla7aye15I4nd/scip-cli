@@ -1,4 +1,6 @@
 mod config;
+mod generator;
+mod template;
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -7,6 +9,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use crate::config::{find_profile, load_profiles};
+use crate::generator::{GenerateOptions, Generator};
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -27,6 +30,43 @@ enum Commands {
     Show {
         /// Repository profile name.
         repository: String,
+    },
+    /// Clone, configure, build, and index a repository.
+    Generate {
+        /// Repository profile name.
+        repository: String,
+
+        /// Directory where the final <repository>.scip file is written.
+        #[arg(short, long, default_value = "scip-output")]
+        output_dir: PathBuf,
+
+        /// Persistent repository checkout directory.
+        #[arg(long, default_value = ".scip-cli/work")]
+        work_dir: PathBuf,
+
+        /// Persistent downloaded-tools directory.
+        #[arg(long, default_value = ".scip-cli/tools")]
+        tools_dir: PathBuf,
+
+        /// Parallel jobs used by configured build commands.
+        #[arg(short = 'j', long, default_value_t = 8)]
+        jobs: usize,
+
+        /// Parallel scip-clang worker processes.
+        #[arg(long, default_value_t = 4)]
+        index_jobs: usize,
+
+        /// Use an existing scip-clang executable.
+        #[arg(long)]
+        scip_clang: Option<PathBuf>,
+
+        /// Print planned actions without changing the filesystem.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Reuse an existing compilation database without running profile commands.
+        #[arg(long)]
+        skip_build: bool,
     },
 }
 
@@ -53,6 +93,40 @@ fn run() -> Result<()> {
         Commands::Show { repository } => {
             let (path, profile) = find_profile(&config_dir, &repository)?;
             println!("# {}\n{}", path.display(), serde_yaml::to_string(&profile)?);
+        }
+        Commands::Generate {
+            repository,
+            output_dir,
+            work_dir,
+            tools_dir,
+            jobs,
+            index_jobs,
+            scip_clang,
+            dry_run,
+            skip_build,
+        } => {
+            if jobs == 0 || index_jobs == 0 {
+                anyhow::bail!("--jobs and --index-jobs must be greater than zero");
+            }
+            let (path, profile) = find_profile(&config_dir, &repository)?;
+            println!("==> Loaded {} from {}", profile.name, path.display());
+            let output = Generator::new(
+                profile,
+                GenerateOptions {
+                    output_dir,
+                    work_dir,
+                    tools_dir,
+                    jobs,
+                    index_jobs,
+                    scip_clang,
+                    dry_run,
+                    skip_build,
+                },
+            )?
+            .run()?;
+            if dry_run {
+                println!("==> Dry run complete; planned output: {}", output.display());
+            }
         }
     }
     Ok(())

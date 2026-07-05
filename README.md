@@ -1,10 +1,11 @@
 # scip-cli
 
-The initial CLI exposes repository profile discovery and inspection:
+The CLI exposes repository profile discovery, inspection, and index generation:
 
 ```bash
 cargo run -p scip-cli -- list
 cargo run -p scip-cli -- show harfbuzz
+cargo run -p scip-cli -- generate harfbuzz --output-dir scip-output
 ```
 
 Profiles live under `configs/`. Use `--config-dir` or the
