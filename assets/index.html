@@ -10,19 +10,26 @@
 </head>
 <body>
   <header class="topbar">
+    <a id="home-link" class="home-link" href="/" title="All repositories" aria-label="Return to home">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7 3 12l5 5M16 7l5 5-5 5M14 4l-4 16"/></svg>
+    </a>
     <button id="menu" class="menu" aria-label="Toggle file browser">☰</button>
     <div class="view-nav" aria-label="View navigation">
       <button id="view-back" type="button" title="Back" aria-label="Back" disabled>←</button>
       <button id="view-forward" type="button" title="Forward" aria-label="Forward" disabled>→</button>
     </div>
-    <div id="breadcrumb" class="breadcrumb">Loading workspace…</div>
+    <div class="workspace-title">
+      <span class="product-name">Source Atlas</span>
+      <span class="title-divider" aria-hidden="true">/</span>
+      <div id="breadcrumb" class="breadcrumb">Loading workspace…</div>
+    </div>
     <div id="stats" class="stats"></div>
   </header>
   <div class="layout">
     <aside id="sidebar" class="sidebar">
       <div class="explorer-heading">
-        <span>Explorer</span>
-        <a id="explorer-home" href="/" title="All repositories">⌂</a>
+        <span>Files</span>
+        <span class="heading-kicker">Index</span>
       </div>
       <label class="search-wrap">
         <span class="sr-only">Find a file</span>
@@ -35,35 +42,33 @@
     <main id="main" class="main">
       <div id="empty" class="empty">Choose a file to browse its source.</div>
       <section id="editor" class="editor" hidden>
-        <div class="editor-head">
-          <div class="editor-title">
-            <span class="file-glyph">&lt;&gt;</span>
-            <div>
-              <span class="reference-label">File Reference</span>
-              <strong id="file-name">Source</strong>
-            </div>
-          </div>
-          <div class="editor-actions">
-            <span id="file-meta"></span>
-          </div>
-        </div>
         <div id="code" class="code" tabindex="0" aria-label="Source code">
           <div id="code-spacer" class="code-spacer"></div>
           <div id="code-window" class="code-window"></div>
         </div>
       </section>
     </main>
+    <aside id="doc-panel" class="doc-panel" aria-label="Function documentation" hidden>
+      <div id="doc-resizer" class="doc-resizer" role="separator" aria-label="Resize code and documentation panels" aria-orientation="vertical" tabindex="0"></div>
+      <div class="doc-heading">
+        <span>Function notes</span>
+        <span id="doc-state" class="doc-state">No file selected</span>
+      </div>
+      <div id="doc-content" class="doc-content">
+        <p class="doc-empty">Choose a source file to view its function documentation.</p>
+      </div>
+    </aside>
     <aside id="view-history" class="history-panel" aria-label="View history" hidden>
       <div class="history-heading">
-        <span>View History</span>
+        <span>History</span>
         <button id="clear-history" type="button" disabled>Clear</button>
       </div>
       <div id="history-list" class="history-list"></div>
     </aside>
   </div>
   <footer class="workbench-status" aria-label="Editor status">
-    <div class="status-left"><span>SCIP index</span></div>
-    <div class="status-right"><span id="position-status">Ln 1, Col 1</span><span id="language-status">SCIP</span><span>🔒 Read-only</span></div>
+    <div class="status-left"><span><i class="status-dot" aria-hidden="true"></i> SCIP index ready</span></div>
+    <div class="status-right"><span id="position-status">Ln 1, Col 1</span><span id="language-status">SCIP</span><span>Read only</span></div>
   </footer>
   <div id="status" class="status" role="status" aria-live="polite"></div>
   <script src="generated/catalog.js"></script>

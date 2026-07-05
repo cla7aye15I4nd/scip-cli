@@ -11,14 +11,14 @@
   const appRoot = new URL("../", document.currentScript.src);
   const routeMode = fileMode || appRoot.pathname !== "/";
   const els = Object.fromEntries([
-    "menu", "explorer-home", "sidebar", "search", "file-list", "file-note", "breadcrumb",
-    "stats", "main", "empty", "editor", "file-name", "file-meta", "code",
+    "menu", "home-link", "sidebar", "search", "file-list", "file-note", "breadcrumb",
+    "stats", "main", "empty", "editor", "code", "doc-panel", "doc-resizer", "doc-state", "doc-content",
     "code-spacer", "code-window", "status", "position-status", "language-status",
     "view-back", "view-forward", "view-history", "history-list", "clear-history"
   ].map(id => [id, document.getElementById(id)]));
   if (routeMode) {
     const home = fileMode ? location.pathname : appRoot.pathname;
-    els["explorer-home"].href = home;
+    els["home-link"].href = home;
   }
 
   let catalog;
@@ -34,6 +34,31 @@
   let statusTimer = 0;
   let viewHistory = [];
   let viewHistoryCursor = -1;
+  let functionDocs = new Map();
+  let panelResize;
+
+  const DOC_WIDTH_KEY = "scip-doc-panel-width";
+  const DEFAULT_DOC_WIDTH = 330;
+  const MIN_DOC_WIDTH = 240;
+  const MAX_DOC_WIDTH = 600;
+
+  function setDocWidth(value, persist = false) {
+    const width = Math.round(Math.min(MAX_DOC_WIDTH, Math.max(MIN_DOC_WIDTH, value)));
+    document.documentElement.style.setProperty("--doc-width", `${width}px`);
+    els["doc-resizer"].setAttribute("aria-valuemin", MIN_DOC_WIDTH);
+    els["doc-resizer"].setAttribute("aria-valuemax", MAX_DOC_WIDTH);
+    els["doc-resizer"].setAttribute("aria-valuenow", width);
+    if (persist) {
+      try { localStorage.setItem(DOC_WIDTH_KEY, width); } catch (_) { /* Storage is optional. */ }
+    }
+  }
+
+  try {
+    const savedDocWidth = Number(localStorage.getItem(DOC_WIDTH_KEY));
+    setDocWidth(Number.isFinite(savedDocWidth) && savedDocWidth ? savedDocWidth : DEFAULT_DOC_WIDTH);
+  } catch (_) {
+    setDocWidth(DEFAULT_DOC_WIDTH);
+  }
 
   const encodePath = path => path.split("/").map(encodeURIComponent).join("/");
   const projectRoot = () => `${routeMode ? "#/" : "/"}${encodeURIComponent(manifest.repoSlug)}/${encodeURIComponent(manifest.commit)}/`;
@@ -54,7 +79,8 @@
       commit: parts[1] || "",
       filePath: parts.slice(2).join("/"),
       line: Math.max(0, Number(params.get("line") || 0)),
-      character: Math.max(0, Number(params.get("char") || 0))
+      character: Math.max(0, Number(params.get("char") || 0)),
+      hasCharacter: params.has("char")
     };
   }
 
@@ -90,6 +116,172 @@
     statusTimer = setTimeout(() => els.status.classList.remove("visible"), 2200);
   }
 
+  function clearFunctionDocs(message = "Choose a source file to view its function documentation.") {
+    functionDocs = new Map();
+    els["doc-state"].textContent = "No file selected";
+    const empty = document.createElement("p");
+    empty.className = "doc-empty";
+    empty.textContent = message;
+    els["doc-content"].replaceChildren(empty);
+  }
+
+  function appendMarkdownInline(parent, text) {
+    const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\))/g;
+    let cursor = 0;
+    for (const match of text.matchAll(pattern)) {
+      parent.append(document.createTextNode(text.slice(cursor, match.index)));
+      const value = match[0];
+      if (value.startsWith("`")) {
+        const code = document.createElement("code");
+        code.textContent = value.slice(1, -1);
+        parent.append(code);
+      } else if (value.startsWith("**")) {
+        const strong = document.createElement("strong");
+        strong.textContent = value.slice(2, -2);
+        parent.append(strong);
+      } else {
+        const parts = value.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+        const link = document.createElement("a");
+        link.textContent = parts[1];
+        if (/^(https?:|#)/.test(parts[2])) link.href = parts[2];
+        parent.append(link);
+      }
+      cursor = match.index + value.length;
+    }
+    parent.append(document.createTextNode(text.slice(cursor)));
+  }
+
+  function renderMarkdown(markdown) {
+    const root = document.createElement("div");
+    root.className = "markdown-body";
+    const sourceLines = String(markdown || "").replace(/\r\n?/g, "\n").split("\n");
+    for (let index = 0; index < sourceLines.length;) {
+      const line = sourceLines[index];
+      if (!line.trim()) { index++; continue; }
+      if (/^```/.test(line)) {
+        const content = [];
+        for (index++; index < sourceLines.length && !/^```/.test(sourceLines[index]); index++) content.push(sourceLines[index]);
+        index++;
+        const pre = document.createElement("pre");
+        const code = document.createElement("code");
+        code.textContent = content.join("\n");
+        pre.append(code);
+        root.append(pre);
+        continue;
+      }
+      const heading = line.match(/^(#{1,3})\s+(.+)$/);
+      if (heading) {
+        const element = document.createElement(`h${heading[1].length}`);
+        appendMarkdownInline(element, heading[2]);
+        root.append(element);
+        index++;
+        continue;
+      }
+      if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
+        root.append(document.createElement("hr"));
+        index++;
+        continue;
+      }
+      if (/^>\s?/.test(line)) {
+        const quote = document.createElement("blockquote");
+        const values = [];
+        while (index < sourceLines.length && /^>\s?/.test(sourceLines[index])) values.push(sourceLines[index++].replace(/^>\s?/, ""));
+        appendMarkdownInline(quote, values.join(" "));
+        root.append(quote);
+        continue;
+      }
+      const listMatch = line.match(/^\s*(?:([-*+])|(\d+)\.)\s+(.+)$/);
+      if (listMatch) {
+        const ordered = Boolean(listMatch[2]);
+        const list = document.createElement(ordered ? "ol" : "ul");
+        while (index < sourceLines.length) {
+          const itemMatch = sourceLines[index].match(/^\s*(?:([-*+])|(\d+)\.)\s+(.+)$/);
+          if (!itemMatch || Boolean(itemMatch[2]) !== ordered) break;
+          const item = document.createElement("li");
+          appendMarkdownInline(item, itemMatch[3]);
+          list.append(item);
+          index++;
+        }
+        root.append(list);
+        continue;
+      }
+      const paragraph = [];
+      while (index < sourceLines.length && sourceLines[index].trim() && !/^(#{1,3})\s|^```|^>\s?|^\s*(?:[-*+]|\d+\.)\s+/.test(sourceLines[index])) paragraph.push(sourceLines[index++].trim());
+      const element = document.createElement("p");
+      appendMarkdownInline(element, paragraph.join(" "));
+      root.append(element);
+    }
+    return root;
+  }
+
+  function isFunctionSymbol(symbol) {
+    return Boolean(symbol) && !symbol.startsWith("local ") && /\([^)]*\)\.$/.test(symbol);
+  }
+
+  function functionMarkdown(item) {
+    const stored = currentData.functionDocs?.[item.symbol] ?? currentData.docs?.[item.symbol];
+    if (typeof stored === "string") return stored;
+    if (stored && typeof stored.markdown === "string") return stored.markdown;
+    return "### Contract\n\n> Documentation has not been generated yet.\n\n### Implementation\n\nPending analysis for this function.\n\n### Possible bugs\n\nNo evidence-backed findings are available.";
+  }
+
+  function renderFunctionDocs() {
+    functionDocs = new Map();
+    const functions = [];
+    for (const occurrence of currentData.occurrences) {
+      if (!(occurrence[8] & 1) || occurrence[4] < 0) continue;
+      const symbol = currentData.symbols[occurrence[4]];
+      if (!isFunctionSymbol(symbol) || functionDocs.has(symbol)) continue;
+      const label = lines[occurrence[0]]?.slice(occurrence[1], occurrence[3]).trim() || symbol;
+      const item = {
+        symbol,
+        label,
+        line: occurrence[0],
+        character: occurrence[1],
+        signature: lines[occurrence[0]]?.trim() || label,
+        id: `function-doc-${functions.length}`
+      };
+      functions.push(item);
+      functionDocs.set(symbol, item);
+    }
+    els["doc-state"].textContent = `${functions.length.toLocaleString()} function${functions.length === 1 ? "" : "s"}`;
+    if (!functions.length) {
+      clearFunctionDocs("No function definitions were identified in this file.");
+      els["doc-state"].textContent = "0 functions";
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    const file = manifest.files[currentId];
+    for (const item of functions) {
+      const article = document.createElement("article");
+      article.id = item.id;
+      article.className = "markdown-doc";
+      article.dataset.symbol = item.symbol;
+      const link = document.createElement("a");
+      link.className = "doc-function-link";
+      link.href = `${fileUrl(file)}?line=${item.line}&char=${item.character}`;
+      link.dataset.symbol = item.symbol;
+      link.textContent = item.label;
+      link.title = `Jump to ${currentData.path}:${item.line + 1}`;
+      const signature = document.createElement("pre");
+      signature.className = "doc-signature";
+      signature.textContent = item.signature;
+      article.append(link, signature, renderMarkdown(functionMarkdown(item)));
+      fragment.append(article);
+    }
+    els["doc-content"].replaceChildren(fragment);
+  }
+
+  function scrollDocToSymbol(symbol) {
+    const item = functionDocs.get(symbol);
+    if (!item) return false;
+    els["doc-content"].querySelectorAll(".markdown-doc.active").forEach(element => element.classList.remove("active"));
+    const article = document.getElementById(item.id);
+    article.classList.add("active");
+    article.scrollIntoView({ behavior: "smooth", block: "start" });
+    return true;
+  }
+
   function renderViewHistory() {
     const fragment = document.createDocumentFragment();
     for (let index = viewHistory.length - 1; index >= 0; index--) {
@@ -109,7 +301,7 @@
       const name = document.createElement("strong");
       name.textContent = view.path.split("/").pop();
       const location = document.createElement("small");
-      location.textContent = `${view.path} · line ${view.line + 1}`;
+      location.textContent = `Ln ${view.line + 1}`;
       copy.append(name, location);
       button.append(graph, copy);
       fragment.append(button);
@@ -165,6 +357,7 @@
     currentId = -1;
     currentData = undefined;
     els.sidebar.hidden = true;
+    els["doc-panel"].hidden = true;
     els["view-history"].hidden = true;
     els.main.parentElement.classList.add("landing-mode");
     els.editor.hidden = true;
@@ -173,28 +366,83 @@
     els.empty.replaceChildren();
     const heading = document.createElement("div");
     heading.className = "landing-content";
+    const hero = document.createElement("header");
+    hero.className = "landing-hero";
+    const heroCopy = document.createElement("div");
+    heroCopy.className = "landing-hero-copy";
+    const eyebrow = document.createElement("div");
+    eyebrow.className = "landing-eyebrow";
+    eyebrow.textContent = "Semantic source explorer";
     const title = document.createElement("h1");
-    title.textContent = "Indexed repositories";
+    title.textContent = "Read the code. Follow the meaning.";
     const intro = document.createElement("p");
-    intro.textContent = "Choose a repository and commit to browse its source code.";
+    intro.textContent = "Explore indexed repositories with precise symbol navigation, focused function notes, and a history that keeps your place.";
+    const totalFiles = catalog.projects.reduce((sum, project) => sum + project.commits.reduce((count, revision) => count + revision.fileCount, 0), 0);
+    const totalSymbols = catalog.projects.reduce((sum, project) => sum + project.commits.reduce((count, revision) => count + revision.occurrenceCount, 0), 0);
+    const metrics = document.createElement("div");
+    metrics.className = "landing-metrics";
+    for (const [value, label] of [
+      [catalog.projects.length.toLocaleString(), "repositories"],
+      [totalFiles.toLocaleString(), "indexed files"],
+      [totalSymbols.toLocaleString(), "symbol links"]
+    ]) {
+      const metric = document.createElement("span");
+      metric.innerHTML = `<strong>${value}</strong>${label}`;
+      metrics.append(metric);
+    }
+    heroCopy.append(eyebrow, title, intro, metrics);
+    const diagram = document.createElement("div");
+    diagram.className = "landing-diagram";
+    diagram.setAttribute("aria-hidden", "true");
+    diagram.innerHTML = `<div class="diagram-label">symbol graph</div><div class="diagram-path path-a"></div><div class="diagram-path path-b"></div><i class="diagram-node node-a"></i><i class="diagram-node node-b"></i><i class="diagram-node node-c"></i><code>definition()</code><code>reference</code><code>docs.md</code>`;
+    hero.append(heroCopy, diagram);
+    const sectionHead = document.createElement("div");
+    sectionHead.className = "project-section-head";
+    const sectionTitle = document.createElement("h2");
+    sectionTitle.textContent = "Browse repositories";
+    const sectionHint = document.createElement("p");
+    sectionHint.textContent = "Select a revision to open its source tree.";
+    sectionHead.append(sectionTitle, sectionHint);
     const projects = document.createElement("div");
     projects.className = "project-grid";
-    heading.append(title, intro, projects);
+    heading.append(hero, sectionHead, projects);
     for (const project of catalog.projects) {
       const card = document.createElement("section");
       card.className = "project-card";
+      const cardHead = document.createElement("div");
+      cardHead.className = "project-card-head";
+      const mark = document.createElement("span");
+      mark.className = "project-mark";
+      const repoName = project.repoUrl.replace(/\/$/, "").split("/").pop() || project.slug;
+      mark.textContent = repoName.slice(0, 1).toUpperCase();
+      const nameWrap = document.createElement("div");
       const name = document.createElement("h2");
-      name.textContent = project.repoUrl;
-      card.append(name);
+      name.textContent = repoName;
+      const origin = document.createElement("p");
+      origin.textContent = project.repoUrl;
+      nameWrap.append(name, origin);
+      const count = document.createElement("span");
+      count.className = "revision-count";
+      count.textContent = `${project.commits.length} revision${project.commits.length === 1 ? "" : "s"}`;
+      cardHead.append(mark, nameWrap, count);
+      card.append(cardHead);
       for (const revision of project.commits) {
         const link = document.createElement("a");
         link.className = "commit-link";
         link.href = `${routeMode ? "#/" : "/"}${encodeURIComponent(project.slug)}/${encodeURIComponent(revision.commit)}/`;
         const commit = document.createElement("code");
         commit.textContent = revision.commit;
+        const commitCopy = document.createElement("span");
+        commitCopy.className = "commit-copy";
+        const revisionTitle = document.createElement("strong");
+        revisionTitle.textContent = revision.title || "Indexed revision";
         const meta = document.createElement("span");
         meta.textContent = `${revision.fileCount.toLocaleString()} files · ${revision.occurrenceCount.toLocaleString()} symbols`;
-        link.append(commit, meta);
+        commitCopy.append(revisionTitle, meta);
+        const arrow = document.createElement("span");
+        arrow.className = "commit-arrow";
+        arrow.textContent = "→";
+        link.append(commit, commitCopy, arrow);
         card.append(link);
       }
       projects.append(card);
@@ -328,6 +576,7 @@
       const span = document.createElement(targetFile >= 0 ? "a" : "span");
       span.className = `token syntax-${syntax}${symbol ? " symbol" : ""}${item[8] & 1 ? " definition" : ""}${symbol && targetFile < 0 ? " external" : ""}`;
       if (symbol) span.title = targetFile < 0 ? `${symbol}\nDefinition is outside this index` : symbol;
+      if (symbol) span.dataset.symbol = symbol;
       if (targetFile >= 0) {
         const target = manifest.files[targetFile];
         span.href = `${fileUrl(target)}?line=${item[6]}&char=${item[7]}`;
@@ -380,6 +629,7 @@
   function showProjectHome() {
     currentId = -1;
     currentData = undefined;
+    clearFunctionDocs();
     els.editor.hidden = true;
     els.empty.hidden = false;
     els.empty.className = "empty";
@@ -401,6 +651,7 @@
     const revision = project?.commits.find(item => item.commit === target.commit);
     if (!project || !revision) {
       els.sidebar.hidden = true;
+      els["doc-panel"].hidden = true;
       els["view-history"].hidden = true;
       els.editor.hidden = true;
       els.empty.hidden = false;
@@ -422,6 +673,8 @@
         currentProject = key;
         currentId = -1;
         els.sidebar.hidden = false;
+        els["doc-panel"].hidden = false;
+        els["view-history"].hidden = false;
         els.main.parentElement.classList.remove("landing-mode");
         els.stats.textContent = `${manifest.fileCount.toLocaleString()} files · ${manifest.occurrenceCount.toLocaleString()} symbols`;
         renderFileList();
@@ -449,8 +702,6 @@
         lines = currentData.text.split("\n");
         prepareOccurrences(currentData);
         els.breadcrumb.textContent = `${manifest.repoUrl} / ${currentData.path}`;
-        els["file-name"].textContent = currentData.path.split("/").pop();
-        els["file-meta"].textContent = `${currentData.language || "Text"} · ${lines.length.toLocaleString()} lines`;
         els["language-status"].textContent = currentData.language || "Plain Text";
         document.title = `${currentData.path} · ${manifest.title}`;
         els["code-spacer"].style.height = `${lines.length * LINE_HEIGHT}px`;
@@ -458,6 +709,7 @@
         els.editor.hidden = false;
         renderedStart = renderedEnd = -1;
         renderFileList(els.search.value);
+        renderFunctionDocs();
       }
       centerLine(target.line);
       els["position-status"].textContent = `Ln ${target.line + 1}, Col ${target.character + 1}`;
@@ -532,6 +784,45 @@
     navigate(viewHistory[index].url);
   });
   els.code.addEventListener("scroll", scheduleWindow, { passive: true });
+  els.code.addEventListener("contextmenu", event => {
+    const symbolToken = event.target.closest(".symbol[data-symbol]");
+    if (!symbolToken || !scrollDocToSymbol(symbolToken.dataset.symbol)) return;
+    event.preventDefault();
+    status(`Documentation: ${symbolToken.textContent}`);
+  });
+  els["doc-resizer"].addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
+    panelResize = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: els["doc-panel"].getBoundingClientRect().width
+    };
+    els["doc-resizer"].setPointerCapture(event.pointerId);
+    document.body.classList.add("resizing-panels");
+    event.preventDefault();
+  });
+  els["doc-resizer"].addEventListener("pointermove", event => {
+    if (!panelResize || panelResize.pointerId !== event.pointerId) return;
+    setDocWidth(panelResize.startWidth + panelResize.startX - event.clientX);
+    scheduleWindow();
+  });
+  const finishPanelResize = event => {
+    if (!panelResize || panelResize.pointerId !== event.pointerId) return;
+    const width = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--doc-width"));
+    panelResize = undefined;
+    document.body.classList.remove("resizing-panels");
+    setDocWidth(width, true);
+  };
+  els["doc-resizer"].addEventListener("pointerup", finishPanelResize);
+  els["doc-resizer"].addEventListener("pointercancel", finishPanelResize);
+  els["doc-resizer"].addEventListener("dblclick", () => setDocWidth(DEFAULT_DOC_WIDTH, true));
+  els["doc-resizer"].addEventListener("keydown", event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home'].includes(event.key)) return;
+    const current = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--doc-width"));
+    setDocWidth(event.key === 'Home' ? DEFAULT_DOC_WIDTH : current + (event.key === 'ArrowLeft' ? 20 : -20), true);
+    scheduleWindow();
+    event.preventDefault();
+  });
   window.addEventListener("resize", scheduleWindow, { passive: true });
   window.addEventListener("popstate", openRoute);
   window.addEventListener("hashchange", openRoute);
