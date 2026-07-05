@@ -14,24 +14,11 @@
     "menu", "home-link", "sidebar", "search", "file-list", "file-note", "breadcrumb",
     "stats", "main", "empty", "editor", "code", "doc-panel", "doc-resizer", "doc-state", "doc-content",
     "code-spacer", "code-window", "status", "position-status", "language-status",
-    "view-back", "view-forward", "view-history", "history-list", "clear-history",
-    "agent-toggle", "agent-indicator", "agent-toggle-label", "agent-panel", "agent-close",
-    "agent-run", "agent-state", "agent-usage", "agent-tasks-tab", "agent-bugs-tab", "agent-bug-count",
-    "agent-tasks-view", "agent-bugs-view", "agent-running-count", "agent-pending-count", "agent-recent-count",
-    "agent-running-list", "agent-pending-list", "agent-recent-list", "agent-bug-list", "agent-log", "agent-log-state",
-    "build-status", "build-button", "backend-error", "backend-error-message", "backend-error-dismiss"
+    "view-back", "view-forward", "view-history", "history-list", "clear-history"
   ].map(id => [id, document.getElementById(id)]));
-  const nav = {
-    code: document.getElementById("nav-code"),
-    vulnerabilities: document.getElementById("nav-vulnerabilities"),
-    tasks: document.getElementById("nav-tasks")
-  };
   if (routeMode) {
     const home = fileMode ? location.pathname : appRoot.pathname;
     els["home-link"].href = home;
-    nav.code.href = "#/";
-    nav.vulnerabilities.href = "#/vulnerabilities";
-    nav.tasks.href = "#/tasks";
   }
 
   let catalog;
@@ -48,16 +35,7 @@
   let viewHistory = [];
   let viewHistoryCursor = -1;
   let functionDocs = new Map();
-  let docObserver;
-  const agentTasks = new Map();
-  const agentBugs = new Map();
-  const agentLogs = [];
-  let agentConnected = false;
-  let selectedAgentTask = "";
-  let repositorySync;
-  let repositoryBuild;
   let panelResize;
-  let backendErrorVisible = false;
 
   const DOC_WIDTH_KEY = "scip-doc-panel-width";
   const DEFAULT_DOC_WIDTH = 330;
@@ -96,24 +74,14 @@
     } catch (_) {
       return { invalid: true };
     }
-    const scopedPage = ["vulnerabilities", "tasks"].includes(parts[2]) ? parts[2] : "";
-    const globalPage = ["vulnerabilities", "tasks"].includes(parts[0]) ? parts[0] : "";
-    const page = scopedPage || globalPage || (parts[0] ? "repository" : "repositories");
     return {
-      page,
-      slug: scopedPage || !globalPage ? (parts[0] || "") : "",
-      commit: scopedPage || !globalPage ? (parts[1] || "") : "",
-      filePath: scopedPage ? "" : parts.slice(2).join("/"),
+      slug: parts[0] || "",
+      commit: parts[1] || "",
+      filePath: parts.slice(2).join("/"),
       line: Math.max(0, Number(params.get("line") || 0)),
       character: Math.max(0, Number(params.get("char") || 0)),
       hasCharacter: params.has("char")
     };
-  }
-
-  function setActiveNavigation(page) {
-    nav.code.classList.toggle("active", page === "repository");
-    nav.vulnerabilities.classList.toggle("active", page === "vulnerabilities");
-    nav.tasks.classList.toggle("active", page === "tasks");
   }
 
   function navigate(url, replace = false) {
@@ -146,34 +114,6 @@
     els.status.classList.add("visible");
     clearTimeout(statusTimer);
     statusTimer = setTimeout(() => els.status.classList.remove("visible"), 2200);
-  }
-
-  function showBackendError(message = "EXP could not reach the agent service. The code browser remains available.") {
-    els["backend-error-message"].textContent = message;
-    els["backend-error"].hidden = false;
-    backendErrorVisible = true;
-  }
-
-  function clearBackendError() {
-    if (!backendErrorVisible) return;
-    els["backend-error"].hidden = true;
-    backendErrorVisible = false;
-  }
-
-  const scopedUrl = page => manifest
-    ? `${projectRoot()}${page}`
-    : (routeMode ? `#/${page}` : `/${page}`);
-
-  function updateContextNavigation() {
-    const available = Boolean(manifest);
-    document.querySelector(".primary-nav").classList.toggle("contextless", !available);
-    els["build-status"].hidden = !available;
-    els["build-button"].hidden = !available;
-    if (!available) return;
-    const firstFile = manifest.files[0];
-    nav.code.href = firstFile ? fileUrl(firstFile) : projectRoot();
-    nav.vulnerabilities.href = projectRoot();
-    nav.tasks.href = scopedUrl("tasks");
   }
 
   function clearFunctionDocs(message = "Choose a source file to view its function documentation.") {
@@ -275,326 +215,17 @@
   }
 
   function isFunctionSymbol(symbol) {
-    return Boolean(symbol) && (Boolean(currentData?.functionDocKeys?.[symbol]) || (!symbol.startsWith("local ") && /\([^)]*\)\.$/.test(symbol)));
+    return Boolean(symbol) && !symbol.startsWith("local ") && /\([^)]*\)\.$/.test(symbol);
   }
 
   function functionMarkdown(item) {
     const stored = currentData.functionDocs?.[item.symbol] ?? currentData.docs?.[item.symbol];
     if (typeof stored === "string") return stored;
     if (stored && typeof stored.markdown === "string") return stored.markdown;
-    return item.docKey
-      ? "### Documentation\n\n> Waiting for the documentation agent."
-      : "### Documentation\n\n> This function is not present in the generated function index.";
-  }
-
-  const listMarkdown = values => values?.length ? values.map(value => `- ${value}`).join("\n") : "- None identified.";
-
-  function storedDocumentMarkdown(document) {
-    const contract = document.contract || {};
-    const implementation = document.implementation || {};
-    const parameters = contract.parameters?.length
-      ? contract.parameters.map(parameter => {
-          const constraints = parameter.constraints?.length ? ` Constraints: ${parameter.constraints.join("; ")}` : "";
-          return `- \`${parameter.name}\`: ${parameter.description}${constraints}`;
-        }).join("\n")
-      : "- No parameters documented.";
-    const related = implementation.relatedFunctions?.length
-      ? implementation.relatedFunctions.map(item => `- \`${item.scipSymbol}\` (${item.relationship}): ${item.description}`).join("\n")
-      : "- None identified.";
-    const bugs = document.possibleBugs?.length
-      ? document.possibleBugs.map(bug => {
-          const status = (bug.verification?.status || "unverified").toUpperCase();
-          const evidence = bug.verification?.evidence?.length
-            ? bug.verification.evidence.map(item => `${item.kind}: ${item.description} (${item.artifact})`).join("; ")
-            : "No validation evidence recorded.";
-          return `### [${status}] ${bug.title}\n\n**Severity:** ${bug.severity} · **Confidence:** ${Math.round((bug.confidence || 0) * 100)}%\n\n${bug.reason}\n\n**Trigger:** ${bug.trigger}\n\n**Impact:** ${bug.impact}\n\n**How to validate:** ${bug.validation}\n\n**Verification:** ${bug.verification?.summary || evidence}\n\n**Evidence:** ${evidence}`;
-        }).join("\n\n")
-      : "No possible bugs were identified with sufficient evidence.";
-    const progress = document.status && document.status !== "completed"
-      ? `> ${document.progress?.message || `Documentation is ${document.status}.`}\n\n`
-      : "";
-    return `${progress}## Contract\n\n${contract.summary || "This section has not been written yet."}\n\n### Parameters\n\n${parameters}\n\n### Returns\n\n${contract.returns || "Not documented."}\n\n### Preconditions\n\n${listMarkdown(contract.preconditions)}\n\n### Side effects\n\n${listMarkdown(contract.sideEffects)}\n\n### Errors\n\n${listMarkdown(contract.errors)}\n\n### Thread safety\n\n${contract.threadSafety || "unknown"}\n\n## Implementation\n\n${implementation.summary || "This section has not been written yet."}\n\n### Steps\n\n${listMarkdown(implementation.steps)}\n\n### Related functions\n\n${related}\n\n### Failure paths\n\n${listMarkdown(implementation.failurePaths)}\n\n### Complexity\n\n${implementation.complexity || "unknown"}\n\n## Possible bugs\n\n${bugs}`;
-  }
-
-  async function loadFunctionDocument(item) {
-    if (!item.docKey || ["loading", "loaded", "missing"].includes(item.documentState)) return;
-    item.documentState = "loading";
-    try {
-      const base = `generated/${encodeURIComponent(manifest.repoSlug)}/${encodeURIComponent(manifest.commit)}/docs/${encodeURIComponent(item.docKey)}`;
-      let document;
-      if (fileMode) {
-        document = await loadScript(`${base}.js`, "__SCIP_FUNCTION_DOC__");
-      } else {
-        const response = await fetch(new URL(`${base}.json`, appRoot), { cache: "no-store" });
-        if (response.status === 404) {
-          item.documentState = "missing";
-          return;
-        }
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        document = await response.json();
-      }
-      if (currentData && item.article?.isConnected) {
-        item.body.replaceChildren(renderMarkdown(storedDocumentMarkdown(document)));
-        item.article.classList.toggle("documented", document.status === "completed");
-        item.documentState = document.status === "completed" ? "loaded" : "loading";
-      }
-    } catch (_) {
-      item.documentState = "missing";
-    }
-  }
-
-  function applyLiveDocument(document) {
-    for (const item of functionDocs.values()) {
-      if (item.docKey !== document.docKey || !item.article?.isConnected) continue;
-      item.body.replaceChildren(renderMarkdown(storedDocumentMarkdown(document)));
-      item.article.classList.toggle("documented", document.status === "completed");
-      item.documentState = document.status === "completed" ? "loaded" : "loading";
-    }
-  }
-
-  function renderAgentPanel() {
-    const repo = manifest?.repoSlug;
-    const tasks = [...agentTasks.values()].filter(task => !repo || task.repo === repo)
-      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
-    const running = tasks.filter(task => task.state === "running" || task.state === "preparing");
-    const pending = tasks.filter(task => task.state === "queued" || task.state === "paused");
-    const recent = tasks.filter(task => ["completed", "failed", "partial"].includes(task.state));
-    const failed = tasks.filter(task => task.state === "failed" || task.state === "partial");
-    els["agent-toggle"].classList.toggle("connected", agentConnected && !running.length && !failed.length);
-    els["agent-toggle"].classList.toggle("running", running.length > 0);
-    els["agent-toggle"].classList.toggle("failed", failed.length > 0 && running.length === 0);
-    els["agent-toggle-label"].textContent = !agentConnected
-      ? "Agent offline"
-      : running.length
-        ? `${running.length} task${running.length === 1 ? "" : "s"} running`
-        : pending.length
-          ? `${pending.length} pending`
-          : "Agent idle";
-    els["agent-state"].textContent = !agentConnected
-      ? "Realtime service unavailable"
-      : repositorySync?.state === "running"
-        ? repositorySync.message
-        : running[0]?.progress?.message || (pending.length ? `${pending.length} functions waiting for Codex` : "Ready for documentation work");
-    const usage = tasks.reduce((sum, task) => sum + (task.usage?.inputTokens || 0) + (task.usage?.outputTokens || 0), 0);
-    els["agent-usage"].textContent = usage ? `${usage.toLocaleString()} tokens` : "";
-
-    els["agent-running-count"].textContent = running.length.toLocaleString();
-    els["agent-pending-count"].textContent = pending.length.toLocaleString();
-    els["agent-recent-count"].textContent = recent.length.toLocaleString();
-    renderTaskRows(els["agent-running-list"], running, "No Codex task is currently running.", 20);
-    renderTaskRows(els["agent-pending-list"], pending, "The documentation queue is empty.", 200);
-    renderTaskRows(els["agent-recent-list"], recent, "No completed tasks yet.", 30);
-    renderBugList();
-
-    const logFragment = document.createDocumentFragment();
-    for (const value of agentLogs.slice(-100)) {
-      const row = document.createElement("div");
-      row.className = `agent-log-entry ${value.entry.level}`;
-      const time = document.createElement("time");
-      time.textContent = new Date(value.entry.timestamp).toLocaleTimeString([], { hour12: false });
-      const kind = document.createElement("b");
-      kind.textContent = value.entry.kind;
-      const message = document.createElement("span");
-      message.textContent = value.entry.message;
-      row.append(time, kind, message);
-      logFragment.append(row);
-    }
-    els["agent-log"].replaceChildren(logFragment);
-    els["agent-log"].scrollTop = els["agent-log"].scrollHeight;
-    els["agent-log-state"].textContent = agentLogs.length ? `${agentLogs.length} events` : "Waiting for events";
-  }
-
-  function renderTaskRows(container, tasks, emptyMessage, limit) {
-    const fragment = document.createDocumentFragment();
-    for (const task of tasks.slice(0, limit)) {
-      const row = document.createElement("article");
-      row.className = `agent-task ${task.state}`;
-      row.tabIndex = 0;
-      row.title = "Show task log";
-      row.addEventListener("click", () => loadAgentLogs(task.id));
-      const dot = document.createElement("i");
-      dot.className = "agent-task-dot";
-      const copy = document.createElement("div");
-      copy.className = "agent-task-copy";
-      const name = document.createElement("strong");
-      name.textContent = task.displayName;
-      const detail = document.createElement("span");
-      detail.textContent = `${task.progress?.stage || task.state} · ${task.file}`;
-      const progress = document.createElement("span");
-      progress.className = "agent-task-progress";
-      const bar = document.createElement("i");
-      const completed = Number(task.progress?.completedSections || 0);
-      const total = Math.max(1, Number(task.progress?.totalSections || 3));
-      bar.style.width = `${Math.min(100, Math.round(completed / total * 100))}%`;
-      progress.append(bar);
-      copy.append(name, detail, progress);
-      const state = document.createElement("span");
-      state.className = "agent-task-state";
-      state.textContent = task.state;
-      row.append(dot, copy, state);
-      fragment.append(row);
-    }
-    if (!tasks.length) {
-      const empty = document.createElement("p");
-      empty.className = "agent-task-empty";
-      empty.textContent = agentConnected ? emptyMessage : "Start the Python agent service to see live Codex tasks.";
-      fragment.append(empty);
-    } else if (tasks.length > limit) {
-      const more = document.createElement("p");
-      more.className = "agent-task-empty";
-      more.textContent = `${(tasks.length - limit).toLocaleString()} more pending tasks are queued.`;
-      fragment.append(more);
-    }
-    container.replaceChildren(fragment);
-  }
-
-  function renderBugList() {
-    const repo = manifest?.repoSlug;
-    const bugs = [...agentBugs.values()].filter(bug => !repo || bug.repo === repo).sort((a, b) => {
-      const rank = { critical: 0, high: 1, medium: 2, low: 3 };
-      return (rank[a.severity] ?? 4) - (rank[b.severity] ?? 4) || Number(b.confidence || 0) - Number(a.confidence || 0);
-    });
-    els["agent-bug-count"].textContent = bugs.length.toLocaleString();
-    const fragment = document.createDocumentFragment();
-    for (const bug of bugs) {
-      const card = document.createElement("a");
-      card.className = "agent-bug";
-      card.href = routeMode ? `#${bug.url}` : bug.url;
-      const head = document.createElement("div");
-      head.className = "agent-bug-head";
-      const title = document.createElement("strong");
-      title.textContent = bug.title;
-      const severity = document.createElement("span");
-      severity.className = `agent-bug-severity ${String(bug.severity || "unknown").toLowerCase()}`;
-      severity.textContent = bug.severity || "unknown";
-      head.append(title, severity);
-      const copy = document.createElement("div");
-      copy.className = "agent-bug-copy";
-      copy.textContent = bug.reason || bug.impact || "Potential issue reported by the documentation agent.";
-      const meta = document.createElement("div");
-      meta.className = "agent-bug-meta";
-      const source = document.createElement("span");
-      source.textContent = `${bug.repo} · ${bug.file}${bug.function ? ` · ${bug.function}` : ""}`;
-      const verification = document.createElement("span");
-      verification.className = "agent-bug-status";
-      verification.textContent = bug.verification?.status || "unverified";
-      meta.append(source, verification);
-      card.append(head, copy, meta);
-      fragment.append(card);
-    }
-    if (!bugs.length) {
-      const empty = document.createElement("p");
-      empty.className = "agent-task-empty";
-      empty.textContent = agentConnected ? "No potential bugs have been reported for the current repositories." : "Potential bugs appear when the agent service is online.";
-      fragment.append(empty);
-    }
-    els["agent-bug-list"].replaceChildren(fragment);
-  }
-
-  async function loadAgentLogs(taskId) {
-    selectedAgentTask = taskId;
-    try {
-      const response = await fetch(new URL(`api/tasks/${encodeURIComponent(taskId)}/logs`, appRoot), { cache: "no-store" });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      agentLogs.splice(0, agentLogs.length, ...(data.logs || []).map(entry => ({ taskId, entry })));
-      renderAgentPanel();
-    } catch (_) {
-      els["agent-log-state"].textContent = "Unable to load logs";
-    }
-  }
-
-  function replaceDocumentBugs(document) {
-    for (const [id, bug] of agentBugs) {
-      if (bug.docKey === document.docKey) agentBugs.delete(id);
-    }
-    const subject = document.subject || {};
-    for (const [index, bug] of (document.possibleBugs || []).entries()) {
-      const source = bug.source || {};
-      const file = source.file || subject.file || "";
-      const range = source.range || subject.definitionRange || [0, 0, 0, 0];
-      const line = Number(range[0] || 0);
-      const path = file.split("/").map(encodeURIComponent).join("/");
-      const id = `${document.docKey}:${index}:${bug.title || "Potential bug"}`;
-      agentBugs.set(id, {
-        ...bug,
-        id,
-        docKey: document.docKey,
-        repo: subject.repo,
-        function: subject.displayName,
-        file,
-        verification: bug.verification || { status: "unverified" },
-        url: `/${encodeURIComponent(subject.repo)}/${encodeURIComponent(subject.commit)}/${path}?line=${Math.max(0, line)}`
-      });
-    }
-  }
-
-  function initializeAgentMonitor() {
-    if (fileMode || typeof EventSource === "undefined") {
-      renderAgentPanel();
-      return;
-    }
-    const source = new EventSource(new URL("api/events", appRoot));
-    source.addEventListener("open", () => {
-      agentConnected = true;
-      clearBackendError();
-      renderAgentPanel();
-      refreshStandalonePage();
-    });
-    source.addEventListener("error", () => {
-      agentConnected = false;
-      showBackendError();
-      renderAgentPanel();
-      refreshStandalonePage();
-    });
-    source.addEventListener("snapshot", event => {
-      const data = JSON.parse(event.data);
-      agentTasks.clear();
-      for (const task of data.tasks || []) agentTasks.set(task.id, task);
-      agentBugs.clear();
-      for (const bug of data.bugs || []) agentBugs.set(bug.id, bug);
-      repositorySync = data.repositorySync;
-      if (repositoryBuild) repositoryBuild.sync = repositorySync;
-      renderBuildStatus();
-      agentConnected = true;
-      renderAgentPanel();
-      refreshStandalonePage();
-      const active = [...agentTasks.values()].find(task => task.state === "running") || [...agentTasks.values()][0];
-      if (active && active.id !== selectedAgentTask) loadAgentLogs(active.id);
-    });
-    source.addEventListener("task", event => {
-      const data = JSON.parse(event.data);
-      agentTasks.set(data.task.id, data.task);
-      renderAgentPanel();
-      refreshStandalonePage();
-    });
-    source.addEventListener("log", event => {
-      const data = JSON.parse(event.data);
-      agentLogs.push(data);
-      if (agentLogs.length > 500) agentLogs.splice(0, agentLogs.length - 500);
-      renderAgentPanel();
-    });
-    source.addEventListener("document", event => {
-      const data = JSON.parse(event.data);
-      applyLiveDocument(data.document);
-      replaceDocumentBugs(data.document);
-      renderAgentPanel();
-      refreshStandalonePage();
-    });
-    source.addEventListener("state", event => {
-      const data = JSON.parse(event.data);
-      if (data.repositorySync) {
-        repositorySync = data.repositorySync;
-        if (repositoryBuild) repositoryBuild.sync = repositorySync;
-        renderBuildStatus();
-      }
-      renderAgentPanel();
-      refreshStandalonePage();
-    });
+    return "### Contract\n\n> Documentation has not been generated yet.\n\n### Implementation\n\nPending analysis for this function.\n\n### Possible bugs\n\nNo evidence-backed findings are available.";
   }
 
   function renderFunctionDocs() {
-    docObserver?.disconnect();
     functionDocs = new Map();
     const functions = [];
     for (const occurrence of currentData.occurrences) {
@@ -608,8 +239,7 @@
         line: occurrence[0],
         character: occurrence[1],
         signature: lines[occurrence[0]]?.trim() || label,
-        id: `function-doc-${functions.length}`,
-        docKey: currentData.functionDocKeys?.[symbol]
+        id: `function-doc-${functions.length}`
       };
       functions.push(item);
       functionDocs.set(symbol, item);
@@ -636,22 +266,10 @@
       const signature = document.createElement("pre");
       signature.className = "doc-signature";
       signature.textContent = item.signature;
-      const body = renderMarkdown(functionMarkdown(item));
-      body.classList.add("function-doc-body");
-      item.article = article;
-      item.body = body;
-      article.append(link, signature, body);
+      article.append(link, signature, renderMarkdown(functionMarkdown(item)));
       fragment.append(article);
     }
     els["doc-content"].replaceChildren(fragment);
-    docObserver = new IntersectionObserver(entries => {
-      for (const entry of entries) {
-        if (!entry.isIntersecting) continue;
-        const item = functionDocs.get(entry.target.dataset.symbol);
-        if (item) loadFunctionDocument(item);
-      }
-    }, { root: els["doc-content"], rootMargin: "240px 0px" });
-    for (const item of functions) docObserver.observe(item.article);
   }
 
   function scrollDocToSymbol(symbol) {
@@ -659,7 +277,6 @@
     if (!item) return false;
     els["doc-content"].querySelectorAll(".markdown-doc.active").forEach(element => element.classList.remove("active"));
     const article = document.getElementById(item.id);
-    loadFunctionDocument(item);
     article.classList.add("active");
     article.scrollIntoView({ behavior: "smooth", block: "start" });
     return true;
@@ -735,14 +352,10 @@
   }
 
   function showLanding() {
-    setActiveNavigation("repositories");
-    els.menu.hidden = true;
     manifest = undefined;
     currentProject = "";
     currentId = -1;
     currentData = undefined;
-    repositoryBuild = undefined;
-    updateContextNavigation();
     els.sidebar.hidden = true;
     els["doc-panel"].hidden = true;
     els["view-history"].hidden = true;
@@ -759,13 +372,13 @@
     heroCopy.className = "landing-hero-copy";
     const eyebrow = document.createElement("div");
     eyebrow.className = "landing-eyebrow";
-    eyebrow.textContent = "Repository intelligence";
+    eyebrow.textContent = "Semantic source explorer";
     const title = document.createElement("h1");
-    title.textContent = "Understand every repository.";
+    title.textContent = "Read the code. Follow the meaning.";
     const intro = document.createElement("p");
-    intro.textContent = "Search indexed source, follow symbols, and read generated function documentation without turning your browser into an IDE.";
-    const totalFiles = catalog.projects.reduce((sum, project) => sum + (project.commits[0]?.fileCount || 0), 0);
-    const totalSymbols = catalog.projects.reduce((sum, project) => sum + (project.commits[0]?.occurrenceCount || 0), 0);
+    intro.textContent = "Explore indexed repositories with precise symbol navigation, focused function notes, and a history that keeps your place.";
+    const totalFiles = catalog.projects.reduce((sum, project) => sum + project.commits.reduce((count, revision) => count + revision.fileCount, 0), 0);
+    const totalSymbols = catalog.projects.reduce((sum, project) => sum + project.commits.reduce((count, revision) => count + revision.occurrenceCount, 0), 0);
     const metrics = document.createElement("div");
     metrics.className = "landing-metrics";
     for (const [value, label] of [
@@ -788,7 +401,7 @@
     const sectionTitle = document.createElement("h2");
     sectionTitle.textContent = "Browse repositories";
     const sectionHint = document.createElement("p");
-    sectionHint.textContent = "Open the latest generated source index.";
+    sectionHint.textContent = "Select a revision to open its source tree.";
     sectionHead.append(sectionTitle, sectionHint);
     const projects = document.createElement("div");
     projects.className = "project-grid";
@@ -810,25 +423,26 @@
       nameWrap.append(name, origin);
       const count = document.createElement("span");
       count.className = "revision-count";
-      count.textContent = project.commits[0] ? `${project.commits[0].fileCount.toLocaleString()} files` : "Not indexed";
+      count.textContent = `${project.commits.length} revision${project.commits.length === 1 ? "" : "s"}`;
       cardHead.append(mark, nameWrap, count);
       card.append(cardHead);
-      const revision = project.commits[0];
-      if (revision) {
+      for (const revision of project.commits) {
         const link = document.createElement("a");
         link.className = "commit-link";
         link.href = `${routeMode ? "#/" : "/"}${encodeURIComponent(project.slug)}/${encodeURIComponent(revision.commit)}/`;
+        const commit = document.createElement("code");
+        commit.textContent = revision.commit;
         const commitCopy = document.createElement("span");
         commitCopy.className = "commit-copy";
         const revisionTitle = document.createElement("strong");
-        revisionTitle.textContent = "Open findings";
+        revisionTitle.textContent = revision.title || "Indexed revision";
         const meta = document.createElement("span");
         meta.textContent = `${revision.fileCount.toLocaleString()} files · ${revision.occurrenceCount.toLocaleString()} symbols`;
         commitCopy.append(revisionTitle, meta);
         const arrow = document.createElement("span");
         arrow.className = "commit-arrow";
         arrow.textContent = "→";
-        link.append(commitCopy, arrow);
+        link.append(commit, commitCopy, arrow);
         card.append(link);
       }
       projects.append(card);
@@ -838,341 +452,7 @@
     els.stats.textContent = `${catalog.projects.length.toLocaleString()} projects`;
     els["position-status"].textContent = "Ln 1, Col 1";
     els["language-status"].textContent = "SCIP";
-    document.title = "Repositories · EXP";
-  }
-
-  function prepareStandalonePage(page, breadcrumb, title) {
-    setActiveNavigation(page);
-    els.menu.hidden = true;
-    currentId = -1;
-    currentData = undefined;
-    clearFunctionDocs();
-    els.sidebar.hidden = true;
-    els["doc-panel"].hidden = true;
-    els["view-history"].hidden = true;
-    els.editor.hidden = true;
-    els.main.parentElement.classList.add("landing-mode");
-    els.empty.hidden = false;
-    els.empty.className = "empty landing";
-    els.empty.replaceChildren();
-    els.breadcrumb.textContent = manifest ? `${repositoryLabel(manifest.repoSlug)} / ${breadcrumb}` : breadcrumb;
-    els.stats.textContent = "";
-    document.title = `${title} · EXP`;
-    const pageRoot = document.createElement("section");
-    pageRoot.className = "product-page";
-    els.empty.append(pageRoot);
-    return pageRoot;
-  }
-
-  function appendPageHero(root, eyebrowText, titleText, description, action) {
-    const hero = document.createElement("header");
-    hero.className = "page-hero";
-    const copy = document.createElement("div");
-    const eyebrow = document.createElement("div");
-    eyebrow.className = "page-eyebrow";
-    eyebrow.textContent = eyebrowText;
-    const title = document.createElement("h1");
-    title.textContent = titleText;
-    const intro = document.createElement("p");
-    intro.textContent = description;
-    copy.append(eyebrow, title, intro);
-    hero.append(copy);
-    if (action) hero.append(action);
-    root.append(hero);
-  }
-
-  function metricCard(label, value, tone = "") {
-    const card = document.createElement("div");
-    card.className = `metric-card ${tone}`.trim();
-    const name = document.createElement("span");
-    name.textContent = label;
-    const number = document.createElement("strong");
-    number.textContent = typeof value === "number" ? value.toLocaleString() : String(value);
-    card.append(name, number);
-    return card;
-  }
-
-  function repositoryLabel(slug) {
-    const project = catalog?.projects?.find(item => item.slug === slug);
-    return project?.repoUrl?.replace(/\/$/, "").split("/").pop() || slug || "Unknown repository";
-  }
-
-  function renderBuildStatus() {
-    if (!manifest || !repositoryBuild) return;
-    const sync = repositoryBuild.sync;
-    const building = sync?.state === "running" && (!sync.repository || sync.repository === repositoryBuild.profile);
-    const state = building ? "building" : repositoryBuild.isLatest ? "current" : "stale";
-    els["build-status"].className = `build-status ${state}`;
-    els["build-status"].querySelector("span").textContent = building
-      ? "Building latest commit"
-      : repositoryBuild.isLatest ? "Latest commit indexed" : "Index is behind";
-    els["build-button"].disabled = building;
-    els["build-button"].textContent = building ? "Build running…" : "Pull & rebuild";
-  }
-
-  async function loadRepositoryBuildStatus() {
-    if (!manifest) return;
-    try {
-      const response = await fetch(new URL(`api/repositories/${encodeURIComponent(manifest.repoSlug)}/status`, appRoot), { cache: "no-store" });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      repositoryBuild = await response.json();
-      clearBackendError();
-      renderBuildStatus();
-      const route = parseRoute();
-      if (route.page === "repository" && !route.filePath) showVulnerabilities();
-      else refreshStandalonePage();
-    } catch (_) {
-      els["build-status"].className = "build-status offline";
-      els["build-status"].querySelector("span").textContent = "Build status unavailable";
-      showBackendError("The frontend is online, but build status and agent actions are unavailable because the backend cannot be reached.");
-    }
-  }
-
-  async function requestRepositoryBuild() {
-    if (!manifest) return;
-    els["build-button"].disabled = true;
-    try {
-      const response = await fetch(new URL(`api/repositories/${encodeURIComponent(manifest.repoSlug)}/build`, appRoot), { method: "POST" });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      repositoryBuild = { ...(repositoryBuild || {}), sync: { state: "running", repository: repositoryBuild?.profile,
-        message: "Build queued behind the active documentation cycle" } };
-      renderBuildStatus();
-      status(`Build requested for ${repositoryLabel(manifest.repoSlug)}`);
-      clearBackendError();
-    } catch (_) {
-      els["build-button"].disabled = false;
-      showBackendError("EXP could not start the repository build. Check that the agent backend is running and try again.");
-    }
-  }
-
-  function showVulnerabilities() {
-    const root = prepareStandalonePage("vulnerabilities", "Findings", "Findings");
-    appendPageHero(
-      root,
-      repositoryLabel(manifest?.repoSlug),
-      "Findings",
-      `Review possible defects for this repository, check verification evidence, and jump to the exact source location. ${manifest?.repoUrl || ""}`
-    );
-    const repo = manifest?.repoSlug;
-    const allBugs = [...agentBugs.values()].filter(bug => !repo || bug.repo === repo);
-    const metrics = document.createElement("div");
-    metrics.className = "metric-grid";
-    metrics.append(
-      metricCard("Total findings", allBugs.length),
-      metricCard("Critical & high", allBugs.filter(bug => ["critical", "high"].includes(String(bug.severity).toLowerCase())).length, "danger"),
-      metricCard("Unverified", allBugs.filter(bug => (bug.verification?.status || "unverified") === "unverified").length, "warning"),
-      metricCard("Indexed commit", manifest?.commit?.slice(0, 7) || "—")
-    );
-    root.append(metrics);
-    const build = document.createElement("section");
-    build.className = "repository-build-card findings-build";
-    const buildCopy = document.createElement("div");
-    const buildTitle = document.createElement("strong");
-    buildTitle.textContent = repositoryBuild?.isLatest ? "Index matches the latest commit" : "Repository build status";
-    const buildDetail = document.createElement("p");
-    buildDetail.textContent = repositoryBuild
-      ? `Indexed ${repositoryBuild.indexedCommit.slice(0, 12)} · Latest ${repositoryBuild.latestCommit.slice(0, 12) || "unavailable"}`
-      : "Checking the indexed commit against the remote repository…";
-    buildCopy.append(buildTitle, buildDetail);
-    const buildAction = document.createElement("button");
-    buildAction.className = "page-action";
-    buildAction.type = "button";
-    buildAction.textContent = repositoryBuild?.isLatest ? "Rebuild" : "Pull latest & rebuild";
-    buildAction.addEventListener("click", requestRepositoryBuild);
-    build.append(buildCopy, buildAction);
-    root.append(build);
-
-    const filters = document.createElement("div");
-    filters.className = "filter-bar findings-filter";
-    const search = document.createElement("input");
-    search.type = "search";
-    search.placeholder = "Search title, repository, function, or file";
-    search.setAttribute("aria-label", "Search findings");
-    const severity = document.createElement("select");
-    severity.setAttribute("aria-label", "Filter by severity");
-    severity.innerHTML = '<option value="">All severities</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>';
-    const verification = document.createElement("select");
-    verification.setAttribute("aria-label", "Filter by verification");
-    verification.innerHTML = '<option value="">All verification</option><option value="verified">Verified</option><option value="unverified">Unverified</option><option value="refuted">Refuted</option>';
-    filters.append(search, severity, verification);
-    root.append(filters);
-    const list = document.createElement("div");
-    list.className = "finding-list";
-    root.append(list);
-
-    const render = () => {
-      const needle = search.value.trim().toLowerCase();
-      const rank = { critical: 0, high: 1, medium: 2, low: 3 };
-      const bugs = allBugs.filter(bug => {
-        const bugSeverity = String(bug.severity || "unknown").toLowerCase();
-        const bugVerification = bug.verification?.status || "unverified";
-        const haystack = [bug.title, bug.reason, bug.repo, bug.function, bug.file].join(" ").toLowerCase();
-        return (!severity.value || bugSeverity === severity.value)
-          && (!verification.value || bugVerification === verification.value)
-          && (!needle || haystack.includes(needle));
-      }).sort((a, b) => (rank[String(a.severity).toLowerCase()] ?? 4) - (rank[String(b.severity).toLowerCase()] ?? 4)
-        || Number(b.confidence || 0) - Number(a.confidence || 0));
-      const fragment = document.createDocumentFragment();
-      for (const bug of bugs) {
-        const card = document.createElement("a");
-        card.className = "finding-card";
-        card.href = routeMode ? `#${bug.url}` : bug.url;
-        const marker = document.createElement("i");
-        marker.className = `finding-marker ${String(bug.severity || "unknown").toLowerCase()}`;
-        const main = document.createElement("div");
-        main.className = "finding-main";
-        const title = document.createElement("h2");
-        title.textContent = bug.title || "Potential vulnerability";
-        const reason = document.createElement("p");
-        reason.textContent = bug.reason || bug.impact || "The agent reported a possible issue that requires review.";
-        const meta = document.createElement("div");
-        meta.className = "finding-meta";
-        const confidence = Number(bug.confidence || 0);
-        const confidencePercent = Math.round(confidence <= 1 ? confidence * 100 : confidence);
-        for (const value of [
-          repositoryLabel(bug.repo),
-          bug.file || "Unknown file",
-          bug.function || "Unknown function",
-          `${String(bug.severity || "unknown").toUpperCase()} · ${confidencePercent}% confidence`
-        ]) {
-          const item = document.createElement("span");
-          item.textContent = value;
-          meta.append(item);
-        }
-        main.append(title, reason, meta);
-        const status = document.createElement("span");
-        status.className = "finding-status";
-        status.textContent = bug.verification?.status || "unverified";
-        card.append(marker, main, status);
-        fragment.append(card);
-      }
-      if (!bugs.length) {
-        const empty = document.createElement("div");
-        empty.className = "empty-state";
-        empty.textContent = allBugs.length
-          ? "No findings match these filters."
-          : agentConnected
-            ? "No findings have been reported for this repository."
-            : "Connect the documentation agent to load findings.";
-        fragment.append(empty);
-      }
-      list.replaceChildren(fragment);
-    };
-    search.addEventListener("input", render);
-    severity.addEventListener("change", render);
-    verification.addEventListener("change", render);
-    render();
-  }
-
-  function runCard(task) {
-    const card = document.createElement("article");
-    card.className = `run-card ${task.state}`;
-    const dot = document.createElement("i");
-    dot.className = "run-dot";
-    const copy = document.createElement("div");
-    copy.className = "run-copy";
-    const name = document.createElement("strong");
-    name.textContent = task.displayName || task.symbol || "Documentation task";
-    const detail = document.createElement("span");
-    detail.textContent = `${repositoryLabel(task.repo)} · ${task.progress?.stage || task.state} · ${task.file || ""}`;
-    copy.append(name, detail);
-    card.append(dot, copy);
-    return card;
-  }
-
-  function runColumn(title, tasks, emptyMessage, limit = 100) {
-    const column = document.createElement("section");
-    column.className = "run-column";
-    const head = document.createElement("div");
-    head.className = "run-column-head";
-    const name = document.createElement("span");
-    name.textContent = title;
-    const count = document.createElement("span");
-    count.textContent = tasks.length.toLocaleString();
-    head.append(name, count);
-    const list = document.createElement("div");
-    list.className = "run-list";
-    if (tasks.length) {
-      for (const task of tasks.slice(0, limit)) list.append(runCard(task));
-    } else {
-      const empty = document.createElement("div");
-      empty.className = "empty-state";
-      empty.textContent = emptyMessage;
-      list.append(empty);
-    }
-    column.append(head, list);
-    return column;
-  }
-
-  async function requestAgentCycle() {
-    try {
-      const response = await fetch(new URL("api/run", appRoot), { method: "POST" });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      status("Documentation cycle requested");
-      clearBackendError();
-    } catch (_) {
-      showBackendError("EXP could not start a documentation cycle because the agent backend is unavailable.");
-    }
-  }
-
-  function showTasks() {
-    const action = document.createElement("button");
-    action.className = "page-action";
-    action.type = "button";
-    action.textContent = "Run documentation cycle";
-    action.addEventListener("click", requestAgentCycle);
-    const root = prepareStandalonePage("tasks", "Agent runs", "Agent runs");
-    appendPageHero(
-      root,
-      "Codex operations",
-      "Agent runs",
-      "Follow active documentation work, understand what is waiting, and review recently completed functions.",
-      action
-    );
-    const repo = manifest?.repoSlug;
-    const tasks = [...agentTasks.values()].filter(task => !repo || task.repo === repo)
-      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
-    const running = tasks.filter(task => ["running", "preparing"].includes(task.state));
-    const pending = tasks.filter(task => ["queued", "paused"].includes(task.state));
-    const recent = tasks.filter(task => ["completed", "failed", "partial"].includes(task.state));
-    const metrics = document.createElement("div");
-    metrics.className = "metric-grid";
-    const totalUsage = tasks.reduce((sum, task) => sum + (task.usage?.inputTokens || 0) + (task.usage?.outputTokens || 0), 0);
-    metrics.append(
-      metricCard("Running", running.length),
-      metricCard("Pending", pending.length, "warning"),
-      metricCard("Completed", recent.filter(task => task.state === "completed").length),
-      metricCard("Tokens", totalUsage)
-    );
-    root.append(metrics);
-    const sync = document.createElement("div");
-    sync.className = "sync-banner";
-    const syncCopy = document.createElement("div");
-    const syncTitle = document.createElement("strong");
-    syncTitle.textContent = repositorySync?.state === "running" ? "Repository sync in progress" : "Repository sync";
-    const syncMessage = document.createElement("span");
-    syncMessage.textContent = repositorySync?.message || (agentConnected ? "Waiting for the next scheduled source refresh." : "Agent service is offline.");
-    syncCopy.append(syncTitle, syncMessage);
-    const syncState = document.createElement("span");
-    syncState.className = "finding-status";
-    syncState.textContent = repositorySync?.state || (agentConnected ? "idle" : "offline");
-    sync.append(syncCopy, syncState);
-    root.append(sync);
-    const columns = document.createElement("div");
-    columns.className = "run-columns";
-    columns.append(
-      runColumn("Running", running, "No task is running."),
-      runColumn("Pending", pending, "The queue is empty.", 200),
-      runColumn("Recent", recent, "No completed runs yet.", 40)
-    );
-    root.append(columns);
-  }
-
-  function refreshStandalonePage() {
-    if (!catalog) return;
-    const page = parseRoute().page;
-    if (page === "vulnerabilities") showVulnerabilities();
-    if (page === "tasks") showTasks();
+    document.title = "SCIP source browser";
   }
 
   function renderFileList(query = "") {
@@ -1346,24 +626,27 @@
     els.code.scrollTop = (selected + 0.5) * LINE_HEIGHT - els.code.clientHeight / 2;
   }
 
+  function showProjectHome() {
+    currentId = -1;
+    currentData = undefined;
+    clearFunctionDocs();
+    els.editor.hidden = true;
+    els.empty.hidden = false;
+    els.empty.className = "empty";
+    els.empty.textContent = "Choose a file to browse its source.";
+    els.breadcrumb.textContent = `${manifest.repoUrl} · ${manifest.commit}`;
+    document.title = `${manifest.title} · ${manifest.commit}`;
+    els["position-status"].textContent = "Ln 1, Col 1";
+    els["language-status"].textContent = "SCIP";
+    renderFileList(els.search.value);
+  }
+
   async function openRoute() {
     const target = parseRoute();
-    if (target.invalid || target.page === "repositories") {
+    if (target.invalid || !target.slug) {
       showLanding();
       return;
     }
-    if (["vulnerabilities", "tasks"].includes(target.page) && !target.slug) {
-      const project = catalog.projects.find(item => /ffmpeg/i.test(item.repoUrl)) || catalog.projects[0];
-      const revision = project?.commits[0];
-      if (!project || !revision) {
-        showLanding();
-        return;
-      }
-      navigate(`${routeMode ? "#/" : "/"}${encodeURIComponent(project.slug)}/${encodeURIComponent(revision.commit)}/${target.page}`, true);
-      return;
-    }
-    setActiveNavigation(target.page);
-    els.menu.hidden = false;
     const project = catalog.projects.find(item => item.slug === target.slug);
     const revision = project?.commits.find(item => item.commit === target.commit);
     if (!project || !revision) {
@@ -1373,7 +656,7 @@
       els.editor.hidden = true;
       els.empty.hidden = false;
       els.empty.className = "empty";
-      els.empty.textContent = "This repository version is not in the generated catalog.";
+      els.empty.textContent = "This repository or commit is not in the generated catalog.";
       return;
     }
     try {
@@ -1395,26 +678,11 @@
         els.main.parentElement.classList.remove("landing-mode");
         els.stats.textContent = `${manifest.fileCount.toLocaleString()} files · ${manifest.occurrenceCount.toLocaleString()} symbols`;
         renderFileList();
-        updateContextNavigation();
-        loadRepositoryBuildStatus();
-      }
-      updateContextNavigation();
-      if (target.page === "vulnerabilities") {
-        showVulnerabilities();
-        return;
-      }
-      if (target.page === "tasks") {
-        showTasks();
-        return;
       }
       if (!target.filePath) {
-        showVulnerabilities();
+        showProjectHome();
         return;
       }
-      els.sidebar.hidden = false;
-      els["doc-panel"].hidden = false;
-      els["view-history"].hidden = false;
-      els.main.parentElement.classList.remove("landing-mode");
       const file = manifest.files.find(item => item.path === target.filePath);
       if (!file) throw new Error("file is not present in this index");
       if (file.id !== currentId) {
@@ -1506,27 +774,6 @@
     viewHistoryCursor = -1;
     renderViewHistory();
   });
-  els["agent-toggle"].addEventListener("click", () => {
-    navigate(scopedUrl("tasks"));
-  });
-  els["build-button"].addEventListener("click", requestRepositoryBuild);
-  els["backend-error-dismiss"].addEventListener("click", clearBackendError);
-  els["agent-close"].addEventListener("click", () => {
-    els["agent-panel"].hidden = true;
-    els["agent-toggle"].setAttribute("aria-expanded", "false");
-  });
-  function selectAgentView(view) {
-    const bugs = view === "bugs";
-    els["agent-tasks-view"].hidden = bugs;
-    els["agent-bugs-view"].hidden = !bugs;
-    els["agent-tasks-tab"].classList.toggle("active", !bugs);
-    els["agent-bugs-tab"].classList.toggle("active", bugs);
-    els["agent-tasks-tab"].setAttribute("aria-selected", String(!bugs));
-    els["agent-bugs-tab"].setAttribute("aria-selected", String(bugs));
-  }
-  els["agent-tasks-tab"].addEventListener("click", () => selectAgentView("tasks"));
-  els["agent-bugs-tab"].addEventListener("click", () => selectAgentView("bugs"));
-  els["agent-run"].addEventListener("click", requestAgentCycle);
   els["history-list"].addEventListener("click", event => {
     const entry = event.target.closest(".history-entry");
     if (!entry) return;
@@ -1580,9 +827,5 @@
   window.addEventListener("popstate", openRoute);
   window.addEventListener("hashchange", openRoute);
   renderViewHistory();
-  renderAgentPanel();
-  initializeAgentMonitor();
-  const startupParams = new URLSearchParams(location.search);
-  if (startupParams.get("agent") === "1") navigate(scopedUrl("tasks"), true);
   start();
 })();
