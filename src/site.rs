@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -137,15 +137,13 @@ pub fn build(options: BuildOptions) -> Result<BuildReport> {
         bail!("SCIP index contains no documents");
     }
 
-    index
-        .documents
-        .sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    let mut warnings = Vec::new();
+    index.documents = deduplicate_documents(index.documents, &mut warnings);
     for document in &index.documents {
         validate_relative_path(&document.relative_path)?;
     }
 
     let source_root = options.source_root.or_else(|| infer_source_root(&index));
-    let mut warnings = Vec::new();
     let sources: Vec<String> = index
         .documents
         .iter()
@@ -230,6 +228,67 @@ pub fn build(options: BuildOptions) -> Result<BuildReport> {
         output: options.web_root,
         warnings,
     })
+}
+
+/// SCIP producers can emit the same document once per translation unit. Routes are
+/// path-based, so allowing duplicate paths into the manifest makes all but the first
+/// copy unreachable and can point definitions at a different copy than the UI opens.
+fn deduplicate_documents(
+    mut documents: Vec<Document>,
+    warnings: &mut Vec<String>,
+) -> Vec<Document> {
+    documents.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    let mut unique = Vec::with_capacity(documents.len());
+    let mut duplicates = 0usize;
+
+    for document in documents {
+        let Some(existing) = unique.last_mut() else {
+            unique.push(document);
+            continue;
+        };
+        if existing.relative_path != document.relative_path {
+            unique.push(document);
+            continue;
+        }
+
+        duplicates += 1;
+        if existing.position_encoding != document.position_encoding {
+            if document.occurrences.len() > existing.occurrences.len() {
+                *existing = document;
+            }
+            warnings.push(format!(
+                "{} was indexed with conflicting position encodings; kept the most complete copy",
+                existing.relative_path
+            ));
+            continue;
+        }
+
+        if existing.language.is_empty() {
+            existing.language = document.language;
+        }
+        if document.text.len() > existing.text.len() {
+            existing.text = document.text;
+        }
+        existing.occurrences.extend(document.occurrences);
+        existing.symbols.extend(document.symbols);
+
+        existing
+            .occurrences
+            .sort_by_cached_key(|item| item.write_to_bytes().unwrap_or_default());
+        existing.occurrences.dedup();
+        existing
+            .symbols
+            .sort_by_cached_key(|item| item.write_to_bytes().unwrap_or_default());
+        existing.symbols.dedup();
+    }
+
+    if duplicates > 0 {
+        warnings.push(format!(
+            "consolidated {duplicates} duplicate SCIP document entr{} by relative path",
+            if duplicates == 1 { "y" } else { "ies" }
+        ));
+    }
+    unique
 }
 
 fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
@@ -481,7 +540,7 @@ fn make_file_data<'a>(
             occurrence.syntax_kind.value() as i64,
         ]);
     }
-    occurrences.sort_unstable_by_key(|item| (item[0], item[1], item[2], item[3]));
+    let occurrences = consolidate_render_occurrences(occurrences);
 
     FileData {
         path: &document.relative_path,
@@ -490,6 +549,32 @@ fn make_file_data<'a>(
         symbols,
         occurrences,
     }
+}
+
+fn consolidate_render_occurrences(occurrences: Vec<[i64; 10]>) -> Vec<[i64; 10]> {
+    let mut ranges = BTreeMap::<[i64; 4], [i64; 10]>::new();
+    for mut candidate in occurrences {
+        let range = [candidate[0], candidate[1], candidate[2], candidate[3]];
+        let Some(existing) = ranges.get_mut(&range) else {
+            ranges.insert(range, candidate);
+            continue;
+        };
+
+        // One source range may have separate syntax-only, macro, and semantic
+        // occurrences. The browser can render only one anchor, so prefer the one
+        // that can navigate inside this index, then retain its syntax highlighting.
+        let candidate_priority = (candidate[5] >= 0, candidate[4] >= 0, candidate[8] & 1 != 0);
+        let existing_priority = (existing[5] >= 0, existing[4] >= 0, existing[8] & 1 != 0);
+        if candidate_priority > existing_priority {
+            if candidate[9] == 0 {
+                candidate[9] = existing[9];
+            }
+            *existing = candidate;
+        } else if existing[9] == 0 {
+            existing[9] = candidate[9];
+        }
+    }
+    ranges.into_values().collect()
 }
 
 fn occurrence_range(value: &Occurrence) -> Option<Range> {
@@ -608,5 +693,44 @@ mod tests {
             slug_repo_url("git@github.com:owner/repo.git").unwrap(),
             "github-com-owner-repo"
         );
+    }
+
+    #[test]
+    fn consolidates_duplicate_document_paths() {
+        let mut first = Document {
+            relative_path: "tools/tiff_tools.c".to_owned(),
+            language: "C".to_owned(),
+            ..Document::default()
+        };
+        first.occurrences.push(Occurrence {
+            range: vec![0, 0, 3],
+            symbol: "scip . . . first".to_owned(),
+            ..Occurrence::default()
+        });
+        let mut second = first.clone();
+        second.occurrences.push(Occurrence {
+            range: vec![1, 0, 3],
+            symbol: "scip . . . second".to_owned(),
+            ..Occurrence::default()
+        });
+
+        let mut warnings = Vec::new();
+        let documents = deduplicate_documents(vec![first, second], &mut warnings);
+
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0].occurrences.len(), 2);
+        assert!(warnings.iter().any(|warning| warning.contains("duplicate")));
+    }
+
+    #[test]
+    fn prefers_clickable_occurrence_for_the_same_range() {
+        let syntax_only = [2, 4, 2, 10, -1, -1, -1, -1, 0, 17];
+        let clickable = [2, 4, 2, 10, 3, 7, 12, 2, 0, 0];
+
+        let occurrences = consolidate_render_occurrences(vec![syntax_only, clickable]);
+
+        assert_eq!(occurrences.len(), 1);
+        assert_eq!(occurrences[0][5], 7);
+        assert_eq!(occurrences[0][9], 17);
     }
 }
