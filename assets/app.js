@@ -148,7 +148,7 @@
     statusTimer = setTimeout(() => els.status.classList.remove("visible"), 2200);
   }
 
-  function showBackendError(message = "ExpVuln could not reach the agent service. The code browser remains available.") {
+  function showBackendError(message = "EXP could not reach the agent service. The code browser remains available.") {
     els["backend-error-message"].textContent = message;
     els["backend-error"].hidden = false;
     backendErrorVisible = true;
@@ -172,7 +172,7 @@
     if (!available) return;
     const firstFile = manifest.files[0];
     nav.code.href = firstFile ? fileUrl(firstFile) : projectRoot();
-    nav.vulnerabilities.href = scopedUrl("vulnerabilities");
+    nav.vulnerabilities.href = projectRoot();
     nav.tasks.href = scopedUrl("tasks");
   }
 
@@ -821,7 +821,7 @@
         const commitCopy = document.createElement("span");
         commitCopy.className = "commit-copy";
         const revisionTitle = document.createElement("strong");
-        revisionTitle.textContent = "Browse repository";
+        revisionTitle.textContent = "Open findings";
         const meta = document.createElement("span");
         meta.textContent = `${revision.fileCount.toLocaleString()} files · ${revision.occurrenceCount.toLocaleString()} symbols`;
         commitCopy.append(revisionTitle, meta);
@@ -838,7 +838,7 @@
     els.stats.textContent = `${catalog.projects.length.toLocaleString()} projects`;
     els["position-status"].textContent = "Ln 1, Col 1";
     els["language-status"].textContent = "SCIP";
-    document.title = "Repositories · ExpVuln";
+    document.title = "Repositories · EXP";
   }
 
   function prepareStandalonePage(page, breadcrumb, title) {
@@ -857,7 +857,7 @@
     els.empty.replaceChildren();
     els.breadcrumb.textContent = manifest ? `${repositoryLabel(manifest.repoSlug)} / ${breadcrumb}` : breadcrumb;
     els.stats.textContent = "";
-    document.title = `${title} · ExpVuln`;
+    document.title = `${title} · EXP`;
     const pageRoot = document.createElement("section");
     pageRoot.className = "product-page";
     els.empty.append(pageRoot);
@@ -919,7 +919,7 @@
       clearBackendError();
       renderBuildStatus();
       const route = parseRoute();
-      if (route.page === "repository" && !route.filePath) showProjectHome();
+      if (route.page === "repository" && !route.filePath) showVulnerabilities();
       else refreshStandalonePage();
     } catch (_) {
       els["build-status"].className = "build-status offline";
@@ -941,17 +941,17 @@
       clearBackendError();
     } catch (_) {
       els["build-button"].disabled = false;
-      showBackendError("ExpVuln could not start the repository build. Check that the agent backend is running and try again.");
+      showBackendError("EXP could not start the repository build. Check that the agent backend is running and try again.");
     }
   }
 
   function showVulnerabilities() {
-    const root = prepareStandalonePage("vulnerabilities", "Vulnerabilities", "Vulnerabilities");
+    const root = prepareStandalonePage("vulnerabilities", "Findings", "Findings");
     appendPageHero(
       root,
-      "Security findings",
-      "Vulnerabilities",
-      "Review possible defects separately from source browsing. Prioritize by severity and verification status, then jump to the exact source location."
+      repositoryLabel(manifest?.repoSlug),
+      "Findings",
+      `Review possible defects for this repository, check verification evidence, and jump to the exact source location. ${manifest?.repoUrl || ""}`
     );
     const repo = manifest?.repoSlug;
     const allBugs = [...agentBugs.values()].filter(bug => !repo || bug.repo === repo);
@@ -964,13 +964,30 @@
       metricCard("Indexed commit", manifest?.commit?.slice(0, 7) || "—")
     );
     root.append(metrics);
+    const build = document.createElement("section");
+    build.className = "repository-build-card findings-build";
+    const buildCopy = document.createElement("div");
+    const buildTitle = document.createElement("strong");
+    buildTitle.textContent = repositoryBuild?.isLatest ? "Index matches the latest commit" : "Repository build status";
+    const buildDetail = document.createElement("p");
+    buildDetail.textContent = repositoryBuild
+      ? `Indexed ${repositoryBuild.indexedCommit.slice(0, 12)} · Latest ${repositoryBuild.latestCommit.slice(0, 12) || "unavailable"}`
+      : "Checking the indexed commit against the remote repository…";
+    buildCopy.append(buildTitle, buildDetail);
+    const buildAction = document.createElement("button");
+    buildAction.className = "page-action";
+    buildAction.type = "button";
+    buildAction.textContent = repositoryBuild?.isLatest ? "Rebuild" : "Pull latest & rebuild";
+    buildAction.addEventListener("click", requestRepositoryBuild);
+    build.append(buildCopy, buildAction);
+    root.append(build);
 
     const filters = document.createElement("div");
-    filters.className = "filter-bar";
+    filters.className = "filter-bar findings-filter";
     const search = document.createElement("input");
     search.type = "search";
     search.placeholder = "Search title, repository, function, or file";
-    search.setAttribute("aria-label", "Search vulnerabilities");
+    search.setAttribute("aria-label", "Search findings");
     const severity = document.createElement("select");
     severity.setAttribute("aria-label", "Filter by severity");
     severity.innerHTML = '<option value="">All severities</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>';
@@ -1035,8 +1052,8 @@
         empty.textContent = allBugs.length
           ? "No findings match these filters."
           : agentConnected
-            ? "No potential vulnerabilities have been reported for this repository."
-            : "Connect the documentation agent to load potential vulnerabilities.";
+            ? "No findings have been reported for this repository."
+            : "Connect the documentation agent to load findings.";
         fragment.append(empty);
       }
       list.replaceChildren(fragment);
@@ -1094,7 +1111,7 @@
       status("Documentation cycle requested");
       clearBackendError();
     } catch (_) {
-      showBackendError("ExpVuln could not start a documentation cycle because the agent backend is unavailable.");
+      showBackendError("EXP could not start a documentation cycle because the agent backend is unavailable.");
     }
   }
 
@@ -1329,60 +1346,6 @@
     els.code.scrollTop = (selected + 0.5) * LINE_HEIGHT - els.code.clientHeight / 2;
   }
 
-  function showProjectHome() {
-    currentId = -1;
-    currentData = undefined;
-    clearFunctionDocs();
-    els.sidebar.hidden = true;
-    els["doc-panel"].hidden = true;
-    els["view-history"].hidden = true;
-    els.main.parentElement.classList.add("landing-mode");
-    els.editor.hidden = true;
-    els.empty.hidden = false;
-    els.empty.className = "empty landing";
-    els.empty.replaceChildren();
-    const root = document.createElement("section");
-    root.className = "product-page repository-home";
-    const firstFile = manifest.files[0];
-    const action = document.createElement("a");
-    action.className = "page-action primary";
-    action.href = firstFile ? fileUrl(firstFile) : projectRoot();
-    action.textContent = "Browse code →";
-    appendPageHero(root, "Repository", repositoryLabel(manifest.repoSlug), manifest.repoUrl, action);
-    const metrics = document.createElement("div");
-    metrics.className = "metric-grid";
-    metrics.append(
-      metricCard("Indexed files", manifest.fileCount),
-      metricCard("Symbol links", manifest.occurrenceCount),
-      metricCard("Indexed commit", manifest.commit.slice(0, 7)),
-      metricCard("Build", repositoryBuild ? (repositoryBuild.isLatest ? "Current" : "Behind") : "Checking…")
-    );
-    root.append(metrics);
-    const build = document.createElement("section");
-    build.className = "repository-build-card";
-    const copy = document.createElement("div");
-    const title = document.createElement("strong");
-    title.textContent = repositoryBuild?.isLatest ? "Index matches the latest commit" : "Repository build status";
-    const detail = document.createElement("p");
-    detail.textContent = repositoryBuild
-      ? `Indexed ${repositoryBuild.indexedCommit.slice(0, 12)} · Latest ${repositoryBuild.latestCommit.slice(0, 12) || "unavailable"}`
-      : "Checking the indexed commit against the remote repository…";
-    copy.append(title, detail);
-    const button = document.createElement("button");
-    button.className = "page-action";
-    button.type = "button";
-    button.textContent = repositoryBuild?.isLatest ? "Rebuild" : "Pull latest & rebuild";
-    button.addEventListener("click", requestRepositoryBuild);
-    build.append(copy, button);
-    root.append(build);
-    els.empty.append(root);
-    els.breadcrumb.textContent = manifest.repoUrl;
-    document.title = `${repositoryLabel(manifest.repoSlug)} · ExpVuln`;
-    els["position-status"].textContent = "Ln 1, Col 1";
-    els["language-status"].textContent = "SCIP";
-    renderFileList(els.search.value);
-  }
-
   async function openRoute() {
     const target = parseRoute();
     if (target.invalid || target.page === "repositories") {
@@ -1445,7 +1408,7 @@
         return;
       }
       if (!target.filePath) {
-        showProjectHome();
+        showVulnerabilities();
         return;
       }
       els.sidebar.hidden = false;
