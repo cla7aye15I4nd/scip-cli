@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="Static source browser generated from SCIP">
+  <link rel="stylesheet" href="assets/style.css">
+  <title>SCIP source browser</title>
+</head>
+<body>
+  <header class="topbar">
+    <button id="menu" class="menu" aria-label="Toggle file browser">☰</button>
+    <a id="home-link" class="brand" href="/">
+      <span class="brand-mark">&lt;&gt;</span>
+      <span class="brand-copy"><strong>SCIP EXPLORER</strong><small>Solarized</small></span>
+    </a>
+    <div class="top-divider"></div>
+    <div id="breadcrumb" class="breadcrumb">Loading workspace…</div>
+    <div id="stats" class="stats"></div>
+  </header>
+  <div class="layout">
+    <aside id="sidebar" class="sidebar">
+      <div class="explorer-heading">
+        <span>Explorer</span>
+        <a id="explorer-home" href="/" title="All repositories">⌂</a>
+      </div>
+      <label class="search-wrap">
+        <span class="sr-only">Find a file</span>
+        <span class="search-icon">⌕</span>
+        <input id="search" type="search" placeholder="Search files" autocomplete="off" spellcheck="false">
+      </label>
+      <div id="file-list" class="file-list" role="navigation" aria-label="Source files"></div>
+      <div id="file-note" class="file-note"></div>
+    </aside>
+    <main id="main" class="main">
+      <div id="empty" class="empty">Choose a file to browse its source.</div>
+      <section id="editor" class="editor" hidden>
+        <div class="editor-head">
+          <div class="editor-title">
+            <span class="file-glyph">&lt;&gt;</span>
+            <div>
+              <span class="reference-label">File Reference</span>
+              <strong id="file-name">Source</strong>
+            </div>
+          </div>
+          <div class="editor-actions">
+            <span id="file-meta"></span>
+          </div>
+        </div>
+        <div id="code" class="code" tabindex="0" aria-label="Source code">
+          <div id="code-spacer" class="code-spacer"></div>
+          <div id="code-window" class="code-window"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <footer class="workbench-status" aria-label="Editor status">
+    <div class="status-left"><span>SCIP index</span></div>
+    <div class="status-right"><span id="position-status">Ln 1, Col 1</span><span id="language-status">SCIP</span><span>🔒 Read-only</span></div>
+  </footer>
+  <div id="status" class="status" role="status" aria-live="polite"></div>
+  <script src="generated/catalog.js"></script>
+  <script src="assets/app.js" defer></script>
+</body>
+</html>
