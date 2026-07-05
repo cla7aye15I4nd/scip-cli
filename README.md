@@ -47,6 +47,10 @@ By default, checkouts are retained in `.scip-cli/work` and downloaded tools in
 `--work-dir` and `--tools-dir`. Use `--skip-build` to rerun only the indexer
 against an existing compilation database.
 
+On subsequent runs, repositories without a configured `repository.revision` are
+updated with `git pull --ff-only` before their build starts. Profiles with an explicit
+revision remain pinned and are fetched at that revision.
+
 The CLI uses `scip-clang` from `PATH`, a path passed with `--scip-clang`, or an
 automatically downloaded pinned release on x86-64 Linux.
 

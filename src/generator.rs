@@ -182,7 +182,8 @@ impl Generator {
 
     fn clone_repository(&self) -> Result<()> {
         let repository = self.variables.render(&self.profile.repository.url)?;
-        if self.repo_dir.join(".git").is_dir() {
+        let existing_checkout = self.repo_dir.join(".git").is_dir();
+        if existing_checkout {
             println!("==> Using checkout {}", self.repo_dir.display());
         } else {
             if self.repo_dir.exists() {
@@ -220,6 +221,18 @@ impl Generator {
             self.run_program(
                 "git",
                 &["checkout".into(), "--detach".into(), "FETCH_HEAD".into()],
+                Some(&self.repo_dir),
+            )?;
+        } else if existing_checkout {
+            println!("==> Pulling the latest upstream revision");
+            self.run_program(
+                "git",
+                &[
+                    "pull".into(),
+                    "--ff-only".into(),
+                    "--depth".into(),
+                    self.profile.repository.depth.to_string(),
+                ],
                 Some(&self.repo_dir),
             )?;
         }
