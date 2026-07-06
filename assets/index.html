@@ -24,16 +24,8 @@
       <span class="brand-mark" aria-hidden="true">E</span>
       <span>EXP</span>
     </a>
-    <nav class="primary-nav" aria-label="Primary navigation">
-      <a id="nav-code" href="/">Code</a>
-      <a id="nav-vulnerabilities" href="/vulnerabilities">Findings</a>
-    </nav>
     <div class="header-context">
       <button id="menu" class="menu" aria-label="Toggle repository files">☰</button>
-      <div class="view-nav" aria-label="View navigation" hidden>
-      <button id="view-back" type="button" title="Back" aria-label="Back" disabled>←</button>
-      <button id="view-forward" type="button" title="Forward" aria-label="Forward" disabled>→</button>
-      </div>
       <div id="breadcrumb" class="breadcrumb">Repositories</div>
       <div id="stats" class="stats"></div>
     </div>
@@ -71,13 +63,6 @@
         <p class="doc-empty">Choose a source file to view its function documentation.</p>
       </div>
     </aside>
-    <aside id="view-history" class="history-panel" aria-label="View history" hidden>
-      <div class="history-heading">
-        <span>History</span>
-        <button id="clear-history" type="button" disabled>Clear</button>
-      </div>
-      <div id="history-list" class="history-list"></div>
-    </aside>
   </div>
   <footer class="workbench-status" aria-label="Source status" hidden>
     <div class="status-left"><span><i class="status-dot" aria-hidden="true"></i> SCIP index ready</span></div>
@@ -85,19 +70,9 @@
   </footer>
   <div id="status" class="status" role="status" aria-live="polite"></div>
   <script>
-    (() => {
-      const base = window.__SCIP_APP_BASE__ || "/";
-      const app = () => {
-        const script = document.createElement("script");
-        script.src = `${base}assets/app.js`;
-        document.body.append(script);
-      };
-      const catalog = document.createElement("script");
-      catalog.src = `${base}generated/catalog.js`;
-      catalog.onload = app;
-      catalog.onerror = app;
-      document.body.append(catalog);
-    })();
+    const script = document.createElement("script");
+    script.src = `${window.__SCIP_APP_BASE__ || "/"}assets/app.js`;
+    document.body.append(script);
   </script>
 </body>
 </html>

@@ -73,16 +73,16 @@ pub fn initialize_site(web_root: &Path, repositories: &[String], prune: bool) ->
         });
     }
     catalog.projects.sort_by(|a, b| a.slug.cmp(&b.slug));
-    write_json(&path, &catalog)?;
-    write_javascript(
-        &web_root.join("generated/catalog.js"),
-        "__SCIP_CATALOG__",
-        &catalog,
-    )
+    write_json_atomic(&path, &catalog)
 }
 
 fn write_site_shell(web_root: &Path) -> Result<()> {
     fs::create_dir_all(web_root.join("assets"))?;
+    let legacy_catalog = web_root.join("generated/catalog.js");
+    if legacy_catalog.is_file() {
+        fs::remove_file(&legacy_catalog)
+            .with_context(|| format!("failed to remove {}", legacy_catalog.display()))?;
+    }
     fs::write(
         web_root.join("index.html"),
         include_str!("../assets/index.html"),
@@ -232,21 +232,28 @@ pub fn build(options: BuildOptions) -> Result<BuildReport> {
 
     let definitions = collect_definitions(&index.documents, &sources);
     let project_root = options.web_root.join("generated").join(&repo_slug);
-    prune_old_commits(&project_root, &options.commit)?;
     let generated = project_root.join(&options.commit);
+    let staging = project_root.join(format!(
+        ".{}.staging-{}",
+        options.commit,
+        std::process::id()
+    ));
     write_site_shell(&options.web_root)?;
-    fs::create_dir_all(generated.join("files"))?;
+    if staging.exists() {
+        fs::remove_dir_all(&staging).with_context(|| {
+            format!(
+                "failed to clear stale staging directory {}",
+                staging.display()
+            )
+        })?;
+    }
+    fs::create_dir_all(staging.join("files"))?;
 
     let mut occurrence_count = 0;
     for (file_id, document) in index.documents.iter().enumerate() {
         let data = make_file_data(file_id, document, &sources[file_id], &definitions);
         occurrence_count += data.occurrences.len();
-        write_json(&generated.join(format!("files/{file_id}.json")), &data)?;
-        write_javascript(
-            &generated.join(format!("files/{file_id}.js")),
-            "__SCIP_FILE__",
-            &data,
-        )?;
+        write_json(&staging.join(format!("files/{file_id}.json")), &data)?;
     }
 
     let manifest = Manifest {
@@ -267,12 +274,8 @@ pub fn build(options: BuildOptions) -> Result<BuildReport> {
         file_count: index.documents.len(),
         occurrence_count,
     };
-    write_json(&generated.join("manifest.json"), &manifest)?;
-    write_javascript(
-        &generated.join("manifest.js"),
-        "__SCIP_MANIFEST__",
-        &manifest,
-    )?;
+    write_json(&staging.join("manifest.json"), &manifest)?;
+    publish_directory(&staging, &generated)?;
     update_catalog(
         &options.web_root,
         &repo_slug,
@@ -282,6 +285,7 @@ pub fn build(options: BuildOptions) -> Result<BuildReport> {
         index.documents.len(),
         occurrence_count,
     )?;
+    prune_old_commits(&project_root, &options.commit)?;
 
     Ok(BuildReport {
         files: index.documents.len(),
@@ -377,6 +381,62 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
         .with_context(|| format!("failed to write {}", path.display()))
 }
 
+fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("JSON output path has no UTF-8 file name")?;
+    let temporary = path.with_file_name(format!(".{file_name}.tmp-{}", std::process::id()));
+    write_json(&temporary, value)?;
+    fs::rename(&temporary, path).with_context(|| {
+        format!(
+            "failed to publish {} as {}",
+            temporary.display(),
+            path.display()
+        )
+    })
+}
+
+fn publish_directory(staging: &Path, destination: &Path) -> Result<()> {
+    let backup = destination.with_file_name(format!(
+        ".{}.backup-{}",
+        destination
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("generated directory has no UTF-8 file name")?,
+        std::process::id()
+    ));
+    if backup.exists() {
+        fs::remove_dir_all(&backup)
+            .with_context(|| format!("failed to clear stale backup {}", backup.display()))?;
+    }
+    let had_destination = destination.exists();
+    if had_destination {
+        fs::rename(destination, &backup).with_context(|| {
+            format!(
+                "failed to stage existing generated directory {}",
+                destination.display()
+            )
+        })?;
+    }
+    if let Err(error) = fs::rename(staging, destination) {
+        if had_destination {
+            let _ = fs::rename(&backup, destination);
+        }
+        return Err(error).with_context(|| {
+            format!(
+                "failed to publish generated directory {}",
+                destination.display()
+            )
+        });
+    }
+    if had_destination {
+        fs::remove_dir_all(&backup)
+            .with_context(|| format!("failed to remove old generated data {}", backup.display()))?;
+    }
+    Ok(())
+}
+
 fn prune_old_commits(project_root: &Path, current_commit: &str) -> Result<()> {
     let entries = match fs::read_dir(project_root) {
         Ok(entries) => entries,
@@ -388,7 +448,10 @@ fn prune_old_commits(project_root: &Path, current_commit: &str) -> Result<()> {
     };
     for entry in entries {
         let entry = entry?;
-        if entry.file_type()?.is_dir() && entry.file_name() != current_commit {
+        if entry.file_type()?.is_dir()
+            && entry.file_name() != current_commit
+            && !entry.file_name().to_string_lossy().starts_with('.')
+        {
             fs::remove_dir_all(entry.path()).with_context(|| {
                 format!(
                     "failed to remove old commit data {}",
@@ -398,12 +461,6 @@ fn prune_old_commits(project_root: &Path, current_commit: &str) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn write_javascript(path: &Path, variable: &str, value: &impl Serialize) -> Result<()> {
-    let json = serde_json::to_string(value).context("failed to encode JavaScript data")?;
-    fs::write(path, format!("window.{variable}={json};"))
-        .with_context(|| format!("failed to write {}", path.display()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -457,12 +514,7 @@ fn update_catalog(
     project.commits.clear();
     project.commits.push(entry);
     catalog.projects.sort_by(|a, b| a.slug.cmp(&b.slug));
-    write_json(&path, &catalog)?;
-    write_javascript(
-        &web_root.join("generated/catalog.js"),
-        "__SCIP_CATALOG__",
-        &catalog,
-    )
+    write_json_atomic(&path, &catalog)
 }
 
 fn validate_route_segment(value: &str, name: &str) -> Result<()> {
@@ -870,6 +922,60 @@ mod tests {
     }
 
     #[test]
+    fn publishes_generated_directory_without_leaving_old_files() {
+        let root = tempfile::tempdir().unwrap();
+        let staging = root.path().join(".current.staging");
+        let destination = root.path().join("current");
+        fs::create_dir_all(&staging).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(staging.join("new.json"), "new").unwrap();
+        fs::write(destination.join("obsolete.js"), "old").unwrap();
+
+        publish_directory(&staging, &destination).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(destination.join("new.json")).unwrap(),
+            "new"
+        );
+        assert!(!destination.join("obsolete.js").exists());
+        assert!(!staging.exists());
+    }
+
+    #[test]
+    fn builds_json_only_static_site() {
+        let root = tempfile::tempdir().unwrap();
+        let input = root.path().join("index.scip");
+        let web_root = root.path().join("web");
+        let index = Index {
+            documents: vec![Document {
+                relative_path: "src/main.c".to_owned(),
+                language: "C".to_owned(),
+                text: "int main(void) { return 0; }\n".to_owned(),
+                ..Document::default()
+            }],
+            ..Index::default()
+        };
+        fs::write(&input, index.write_to_bytes().unwrap()).unwrap();
+
+        build(BuildOptions {
+            input,
+            source_root: None,
+            web_root: web_root.clone(),
+            repo_url: "https://example.com/repo.git".to_owned(),
+            commit: "abc123".to_owned(),
+            title: "Repo".to_owned(),
+        })
+        .unwrap();
+
+        let generated = web_root.join("generated/example-com-repo/abc123");
+        assert!(generated.join("manifest.json").is_file());
+        assert!(generated.join("files/0.json").is_file());
+        assert!(!generated.join("manifest.js").exists());
+        assert!(!generated.join("files/0.js").exists());
+        assert!(!web_root.join("generated/catalog.js").exists());
+    }
+
+    #[test]
     fn initializes_unbuilt_repositories_without_removing_existing_revisions() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("generated")).unwrap();
@@ -901,6 +1007,7 @@ mod tests {
         assert_eq!(catalog.projects[0].commits[0].commit, "abc");
         assert!(catalog.projects[1].commits.is_empty());
         assert!(root.path().join("index.html").is_file());
+        assert!(!root.path().join("generated/catalog.js").exists());
     }
 
     #[test]

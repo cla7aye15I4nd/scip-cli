@@ -1,23 +1,19 @@
 # scip-cli html
 
 `scip-cli html` adds a [SCIP](https://github.com/scip-code/scip) index and its
-source tree to a shared repository-intelligence site. Symbol occurrences link directly
+source tree to a shared static code browser. Symbol occurrences link directly
 to their definitions, including definitions in other files. Repeated runs add
-or update repository commits in the same `web/` application.
+repositories or replace their currently published commit in the same `web/`
+application.
 
 The output has no server-side runtime or framework. It uses clean history
 routes, loads source files on demand, and virtualizes source lines so very large
 files do not create a very large DOM.
 
-The primary product routes are:
+The browser has two route types:
 
-- `/`: current repository catalog;
-- `/vulnerabilities`: filterable potential-vulnerability review;
-- `/tasks`: running, pending, and recent documentation-agent work;
+- `/`: repository catalog;
 - `/<repo>/<commit>/<path>`: source reading and symbol navigation.
-
-The vulnerability and task pages populate when the companion agent API and SSE
-service are available; the repository and source routes remain static.
 
 ## Build and run
 
@@ -36,18 +32,14 @@ cargo build --release --bin scip-cli
 The source root can be omitted when the SCIP metadata contains an accessible
 `file://` project root, or when every document embeds its source text.
 
-You can open `web/index.html` directly from disk. In this mode the viewer uses
-hash routes and generated JavaScript data files, so file browsing and symbol
-navigation work without a server.
-
-You can also serve the directory over HTTP during development or deployment:
+Serve the directory over HTTP during development or deployment:
 
 ```bash
 python3 -m http.server --directory web 8080
 ```
 
-Then open `http://localhost:8080/`. HTTP mode uses clean history routes and JSON
-payloads; direct-file mode automatically uses equivalent `.js` payloads.
+Then open `http://localhost:8080/`. Generated source data is JSON loaded on
+demand, so opening `index.html` directly with `file://` is not supported.
 
 VS Code Live Preview and similar extensions may expose the page as
 `/web/index.html`. The viewer detects that subdirectory automatically and uses
@@ -81,18 +73,15 @@ web/
 │   └── style.css
 └── generated/
     ├── catalog.json
-    ├── catalog.js
     └── github-com-harfbuzz-harfbuzz/
         └── 8f08f1d/
             ├── manifest.json
-            ├── manifest.js
             └── files/
                 ├── 0.json
-                ├── 0.js
                 └── ...
 ```
 
-The root page lists all generated repositories and commits. Project and file
+The root page lists all generated repositories and their current commits. Project and file
 URLs use normal browser paths:
 
 ```text

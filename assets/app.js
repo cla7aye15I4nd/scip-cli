@@ -6,25 +6,15 @@
   ) || 22;
   const OVERSCAN = 60;
   const MAX_FILE_RESULTS = 400;
-  const MAX_VIEW_HISTORY = 80;
-  const fileMode = location.protocol === "file:";
   const appRoot = new URL("../", document.currentScript.src);
-  const routeMode = fileMode || appRoot.pathname !== "/";
+  const routeMode = appRoot.pathname !== "/";
   const els = Object.fromEntries([
     "menu", "home-link", "sidebar", "search", "file-list", "file-note", "breadcrumb",
     "stats", "main", "empty", "editor", "code", "doc-panel", "doc-resizer", "doc-state", "doc-content",
-    "code-spacer", "code-window", "status", "position-status", "language-status",
-    "view-back", "view-forward", "view-history", "history-list", "clear-history"
+    "code-spacer", "code-window", "status", "position-status", "language-status"
   ].map(id => [id, document.getElementById(id)]));
-  const nav = {
-    code: document.getElementById("nav-code"),
-    vulnerabilities: document.getElementById("nav-vulnerabilities")
-  };
   if (routeMode) {
-    const home = fileMode ? location.pathname : appRoot.pathname;
-    els["home-link"].href = home;
-    nav.code.href = "#/";
-    nav.vulnerabilities.href = "#/vulnerabilities";
+    els["home-link"].href = appRoot.pathname;
   }
 
   let catalog;
@@ -32,14 +22,13 @@
   let currentProject = "";
   let currentId = -1;
   let currentData;
+  let filesByPath = new Map();
   let lines = [];
   let occurrencesByLine = [];
   let renderedStart = -1;
   let renderedEnd = -1;
   let pendingFrame = 0;
   let statusTimer = 0;
-  let viewHistory = [];
-  let viewHistoryCursor = -1;
   let functionDocs = new Map();
   let panelResize;
 
@@ -80,48 +69,30 @@
     } catch (_) {
       return { invalid: true };
     }
-    const scopedPage = ["vulnerabilities"].includes(parts[2]) ? parts[2] : "";
-    const globalPage = ["vulnerabilities"].includes(parts[0]) ? parts[0] : "";
-    const page = scopedPage || globalPage || (parts[0] ? "repository" : "repositories");
     return {
-      page,
-      slug: scopedPage || !globalPage ? (parts[0] || "") : "",
-      commit: scopedPage || !globalPage ? (parts[1] || "") : "",
-      filePath: scopedPage ? "" : parts.slice(2).join("/"),
+      page: parts[0] ? "repository" : "repositories",
+      slug: parts[0] || "",
+      commit: parts[1] || "",
+      filePath: parts.slice(2).join("/"),
       line: Math.max(0, Number(params.get("line") || 0)),
       character: Math.max(0, Number(params.get("char") || 0)),
       hasCharacter: params.has("char")
     };
   }
 
-  function setActiveNavigation(page) {
-    nav.code.classList.toggle("active", page === "repository");
-    nav.vulnerabilities.classList.toggle("active", page === "vulnerabilities");
-  }
-
   function navigate(url, replace = false) {
     if (routeMode) {
-      location.hash = url.startsWith("#") ? url.slice(1) : url;
+      const hash = url.startsWith("#") ? url : `#${url}`;
+      if (replace) {
+        history.replaceState({}, "", hash);
+        openRoute();
+      } else {
+        location.hash = hash.slice(1);
+      }
       return;
     }
     history[replace ? "replaceState" : "pushState"]({}, "", url);
     openRoute();
-  }
-
-  function loadScript(path, globalName) {
-    return new Promise((resolve, reject) => {
-      delete window[globalName];
-      const script = document.createElement("script");
-      script.src = path;
-      script.onload = () => {
-        script.remove();
-        const value = window[globalName];
-        delete window[globalName];
-        value ? resolve(value) : reject(new Error(`Missing ${globalName}`));
-      };
-      script.onerror = () => reject(new Error(`Unable to load ${path}`));
-      document.head.append(script);
-    });
   }
 
   function status(message) {
@@ -129,15 +100,6 @@
     els.status.classList.add("visible");
     clearTimeout(statusTimer);
     statusTimer = setTimeout(() => els.status.classList.remove("visible"), 2200);
-  }
-
-  function updateContextNavigation() {
-    const available = Boolean(manifest);
-    document.querySelector(".primary-nav").classList.toggle("contextless", !available);
-    if (!available) return;
-    const firstFile = manifest.files[0];
-    nav.code.href = firstFile ? fileUrl(firstFile) : projectRoot();
-    nav.vulnerabilities.href = projectRoot();
   }
 
   function clearFunctionDocs(message = "Choose a source file to view its function documentation.") {
@@ -310,86 +272,15 @@
     return true;
   }
 
-  function renderViewHistory() {
-    const fragment = document.createDocumentFragment();
-    for (let index = viewHistory.length - 1; index >= 0; index--) {
-      const view = viewHistory[index];
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = `history-entry${index === viewHistoryCursor ? " current" : ""}${index > viewHistoryCursor ? " future" : ""}`;
-      button.dataset.historyIndex = index;
-      button.title = `${view.path}:${view.line + 1}`;
-      const graph = document.createElement("span");
-      graph.className = "history-graph";
-      const node = document.createElement("span");
-      node.className = "history-node";
-      graph.append(node);
-      const copy = document.createElement("span");
-      copy.className = "history-copy";
-      const name = document.createElement("strong");
-      name.textContent = view.path.split("/").pop();
-      const location = document.createElement("small");
-      location.textContent = `Ln ${view.line + 1}`;
-      copy.append(name, location);
-      button.append(graph, copy);
-      fragment.append(button);
-    }
-    if (!viewHistory.length) {
-      const empty = document.createElement("p");
-      empty.className = "history-empty";
-      empty.textContent = "Open a source location to start a view trail.";
-      fragment.append(empty);
-    }
-    els["history-list"].replaceChildren(fragment);
-    els["view-back"].disabled = viewHistoryCursor <= 0;
-    els["view-forward"].disabled = viewHistoryCursor < 0 || viewHistoryCursor >= viewHistory.length - 1;
-    els["clear-history"].disabled = viewHistory.length === 0;
-  }
-
-  function recordView(target, file) {
-    const key = `${target.slug}/${target.commit}/${file.path}?line=${target.line}&char=${target.character}`;
-    if (viewHistory[viewHistoryCursor]?.key === key) {
-      renderViewHistory();
-      return;
-    }
-    if (viewHistory[viewHistoryCursor - 1]?.key === key) {
-      viewHistoryCursor--;
-    } else if (viewHistory[viewHistoryCursor + 1]?.key === key) {
-      viewHistoryCursor++;
-    } else {
-      viewHistory.splice(viewHistoryCursor + 1);
-      viewHistory.push({
-        key,
-        url: `${fileUrl(file)}?line=${target.line}&char=${target.character}`,
-        path: file.path,
-        line: target.line
-      });
-      if (viewHistory.length > MAX_VIEW_HISTORY) viewHistory.shift();
-      viewHistoryCursor = viewHistory.length - 1;
-    }
-    els["view-history"].hidden = false;
-    renderViewHistory();
-  }
-
-  function moveViewHistory(offset) {
-    const next = viewHistoryCursor + offset;
-    if (next < 0 || next >= viewHistory.length) return;
-    viewHistoryCursor = next;
-    renderViewHistory();
-    navigate(viewHistory[next].url);
-  }
-
   function showLanding() {
-    setActiveNavigation("repositories");
     els.menu.hidden = true;
     manifest = undefined;
     currentProject = "";
     currentId = -1;
     currentData = undefined;
-    updateContextNavigation();
+    filesByPath = new Map();
     els.sidebar.hidden = true;
     els["doc-panel"].hidden = true;
-    els["view-history"].hidden = true;
     els.main.parentElement.classList.add("landing-mode");
     els.editor.hidden = true;
     els.empty.hidden = false;
@@ -403,11 +294,11 @@
     heroCopy.className = "landing-hero-copy";
     const eyebrow = document.createElement("div");
     eyebrow.className = "landing-eyebrow";
-    eyebrow.textContent = "Repository intelligence";
+    eyebrow.textContent = "Static source browser";
     const title = document.createElement("h1");
-    title.textContent = "Understand every repository.";
+    title.textContent = "Browse indexed source.";
     const intro = document.createElement("p");
-    intro.textContent = "Search indexed source, follow symbols, and inspect large repositories without turning your browser into an IDE.";
+    intro.textContent = "Search files, read source, follow definitions, and inspect symbol documentation without a backend service.";
     const totalFiles = catalog.projects.reduce((sum, project) => sum + (project.commits[0]?.fileCount || 0), 0);
     const totalSymbols = catalog.projects.reduce((sum, project) => sum + (project.commits[0]?.occurrenceCount || 0), 0);
     const metrics = document.createElement("div");
@@ -465,7 +356,7 @@
         const commitCopy = document.createElement("span");
         commitCopy.className = "commit-copy";
         const revisionTitle = document.createElement("strong");
-        revisionTitle.textContent = "Open findings";
+        revisionTitle.textContent = "Browse source";
         const meta = document.createElement("span");
         meta.textContent = `${revision.fileCount.toLocaleString()} files · ${revision.occurrenceCount.toLocaleString()} symbols`;
         commitCopy.append(revisionTitle, meta);
@@ -483,90 +374,6 @@
     els["position-status"].textContent = "Ln 1, Col 1";
     els["language-status"].textContent = "SCIP";
     document.title = "Repositories · EXP";
-  }
-
-  function prepareStandalonePage(page, breadcrumb, title) {
-    setActiveNavigation(page);
-    els.menu.hidden = true;
-    currentId = -1;
-    currentData = undefined;
-    clearFunctionDocs();
-    els.sidebar.hidden = true;
-    els["doc-panel"].hidden = true;
-    els["view-history"].hidden = true;
-    els.editor.hidden = true;
-    els.main.parentElement.classList.add("landing-mode");
-    els.empty.hidden = false;
-    els.empty.className = "empty landing";
-    els.empty.replaceChildren();
-    els.breadcrumb.textContent = manifest ? `${repositoryLabel(manifest.repoSlug)} / ${breadcrumb}` : breadcrumb;
-    els.stats.textContent = "";
-    document.title = `${title} · EXP`;
-    const pageRoot = document.createElement("section");
-    pageRoot.className = "product-page";
-    els.empty.append(pageRoot);
-    return pageRoot;
-  }
-
-  function appendPageHero(root, eyebrowText, titleText, description, action) {
-    const hero = document.createElement("header");
-    hero.className = "page-hero";
-    const copy = document.createElement("div");
-    const eyebrow = document.createElement("div");
-    eyebrow.className = "page-eyebrow";
-    eyebrow.textContent = eyebrowText;
-    const title = document.createElement("h1");
-    title.textContent = titleText;
-    const intro = document.createElement("p");
-    intro.textContent = description;
-    copy.append(eyebrow, title, intro);
-    hero.append(copy);
-    if (action) hero.append(action);
-    root.append(hero);
-  }
-
-  function metricCard(label, value, tone = "") {
-    const card = document.createElement("div");
-    card.className = `metric-card ${tone}`.trim();
-    const name = document.createElement("span");
-    name.textContent = label;
-    const number = document.createElement("strong");
-    number.textContent = typeof value === "number" ? value.toLocaleString() : String(value);
-    card.append(name, number);
-    return card;
-  }
-
-  function repositoryLabel(slug) {
-    const project = catalog?.projects?.find(item => item.slug === slug);
-    return project?.repoUrl?.replace(/\/$/, "").split("/").pop() || slug || "Unknown repository";
-  }
-
-
-  function showVulnerabilities() {
-    const root = prepareStandalonePage("vulnerabilities", "Findings", "Findings");
-    appendPageHero(
-      root,
-      repositoryLabel(manifest?.repoSlug),
-      "Repository overview",
-      `Browse the latest indexed revision, inspect its source, and review findings when verified data is available. ${manifest?.repoUrl || ""}`
-    );
-    const metrics = document.createElement("div");
-    metrics.className = "metric-grid";
-    metrics.append(
-      metricCard("Indexed files", manifest?.fileCount || 0),
-      metricCard("Symbol links", manifest?.occurrenceCount || 0),
-      metricCard("Indexed commit", manifest?.commit?.slice(0, 12) || "—"),
-      metricCard("Findings", 0)
-    );
-    root.append(metrics);
-    const empty = document.createElement("div");
-    empty.className = "empty-state findings-empty";
-    empty.textContent = "No verified findings are available for this repository.";
-    root.append(empty);
-  }
-
-  function refreshStandalonePage() {
-    if (catalog && parseRoute().page === "vulnerabilities") showVulnerabilities();
   }
 
   function renderFileList(query = "") {
@@ -746,24 +553,12 @@
       showLanding();
       return;
     }
-    if (["vulnerabilities"].includes(target.page) && !target.slug) {
-      const project = catalog.projects.find(item => /ffmpeg/i.test(item.repoUrl)) || catalog.projects[0];
-      const revision = project?.commits[0];
-      if (!project || !revision) {
-        showLanding();
-        return;
-      }
-      navigate(`${routeMode ? "#/" : "/"}${encodeURIComponent(project.slug)}/${encodeURIComponent(revision.commit)}/${target.page}`, true);
-      return;
-    }
-    setActiveNavigation(target.page);
     els.menu.hidden = false;
     const project = catalog.projects.find(item => item.slug === target.slug);
     const revision = project?.commits.find(item => item.commit === target.commit);
     if (!project || !revision) {
       els.sidebar.hidden = true;
       els["doc-panel"].hidden = true;
-      els["view-history"].hidden = true;
       els.editor.hidden = true;
       els.empty.hidden = false;
       els.empty.className = "empty";
@@ -774,37 +569,35 @@
       const key = `${target.slug}/${target.commit}`;
       if (key !== currentProject) {
         const base = `generated/${encodeURIComponent(target.slug)}/${encodeURIComponent(target.commit)}`;
-        if (fileMode) {
-          manifest = await loadScript(`${base}/manifest.js`, "__SCIP_MANIFEST__");
-        } else {
-          const response = await fetch(new URL(`${base}/manifest.json`, appRoot));
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          manifest = await response.json();
-        }
+        const response = await fetch(new URL(`${base}/manifest.json`, appRoot));
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        manifest = await response.json();
+        filesByPath = new Map(manifest.files.map(file => [file.path, file]));
         currentProject = key;
         currentId = -1;
         els.sidebar.hidden = false;
         els["doc-panel"].hidden = false;
-        els["view-history"].hidden = false;
         els.main.parentElement.classList.remove("landing-mode");
         els.stats.textContent = `${manifest.fileCount.toLocaleString()} files · ${manifest.occurrenceCount.toLocaleString()} symbols`;
         renderFileList();
-        updateContextNavigation();
-      }
-      updateContextNavigation();
-      if (target.page === "vulnerabilities") {
-        showVulnerabilities();
-        return;
       }
       if (!target.filePath) {
-        showVulnerabilities();
+        const firstFile = manifest.files[0];
+        if (firstFile) {
+          navigate(fileUrl(firstFile), true);
+        } else {
+          els.sidebar.hidden = false;
+          els["doc-panel"].hidden = true;
+          els.editor.hidden = true;
+          els.empty.hidden = false;
+          els.empty.textContent = "This index contains no source files.";
+        }
         return;
       }
       els.sidebar.hidden = false;
       els["doc-panel"].hidden = false;
-      els["view-history"].hidden = false;
       els.main.parentElement.classList.remove("landing-mode");
-      const file = manifest.files.find(item => item.path === target.filePath);
+      const file = filesByPath.get(target.filePath);
       if (!file) throw new Error("file is not present in this index");
       if (file.id !== currentId) {
         els.empty.hidden = false;
@@ -812,13 +605,9 @@
         els.empty.textContent = "Loading source…";
         els.editor.hidden = true;
         const base = `generated/${encodeURIComponent(target.slug)}/${encodeURIComponent(target.commit)}/files/${file.id}`;
-        if (fileMode) {
-          currentData = await loadScript(`${base}.js`, "__SCIP_FILE__");
-        } else {
-          const response = await fetch(new URL(`${base}.json`, appRoot));
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          currentData = await response.json();
-        }
+        const response = await fetch(new URL(`${base}.json`, appRoot));
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        currentData = await response.json();
         currentId = file.id;
         lines = currentData.text.split("\n");
         prepareOccurrences(currentData);
@@ -835,7 +624,6 @@
       centerLine(target.line);
       els["position-status"].textContent = `Ln ${target.line + 1}, Col ${target.character + 1}`;
       renderWindow(true);
-      recordView(target, file);
       const activeFile = document.querySelector(`.file-link[data-file-id="${file.id}"]`);
       if (activeFile) {
         const list = els["file-list"];
@@ -856,14 +644,9 @@
 
   async function start() {
     try {
-      if (window.__SCIP_CATALOG__) {
-        catalog = window.__SCIP_CATALOG__;
-        delete window.__SCIP_CATALOG__;
-      } else {
-        const response = await fetch(new URL("generated/catalog.json", appRoot));
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        catalog = await response.json();
-      }
+      const response = await fetch(new URL("generated/catalog.json", appRoot));
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      catalog = await response.json();
       openRoute();
     } catch (error) {
       els.empty.textContent = `Unable to load generated catalog: ${error.message}`;
@@ -888,22 +671,6 @@
     if (event.key === "Enter") els["file-list"].querySelector("a")?.click();
   });
   els.menu.addEventListener("click", () => els.sidebar.classList.toggle("open"));
-  els["view-back"].addEventListener("click", () => moveViewHistory(-1));
-  els["view-forward"].addEventListener("click", () => moveViewHistory(1));
-  els["clear-history"].addEventListener("click", () => {
-    viewHistory = [];
-    viewHistoryCursor = -1;
-    renderViewHistory();
-  });
-  els["history-list"].addEventListener("click", event => {
-    const entry = event.target.closest(".history-entry");
-    if (!entry) return;
-    const index = Number(entry.dataset.historyIndex);
-    if (!Number.isInteger(index) || !viewHistory[index]) return;
-    viewHistoryCursor = index;
-    renderViewHistory();
-    navigate(viewHistory[index].url);
-  });
   els.code.addEventListener("scroll", scheduleWindow, { passive: true });
   els.code.addEventListener("contextmenu", event => {
     const symbolToken = event.target.closest(".symbol[data-symbol]");

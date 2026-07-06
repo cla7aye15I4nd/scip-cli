@@ -36,7 +36,7 @@ cargo run --bin scip-cli -- generate libtiff --output-dir scip-output
 cargo run --bin scip-cli -- generate v8 --output-dir scip-output --dry-run
 ```
 
-Generate every configured project and publish all commits into `web/`:
+Generate every configured project and publish its latest commit into `web/`:
 
 ```bash
 cargo gen
