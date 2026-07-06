@@ -1,0 +1,32 @@
+name: linux
+repoUrl: https://github.com/torvalds/linux.git
+timeoutMinutes: 180
+buildJobs: 4
+ccacheMaxSize: 2G
+build: |
+  make -C "$SOURCE_DIR" O="$BUILD_DIR" \
+    LLVM=1 \
+    CC="ccache clang" \
+    HOSTCC="ccache clang" \
+    defconfig
+  make -C "$SOURCE_DIR" O="$BUILD_DIR" \
+    LLVM=1 \
+    CC="ccache clang" \
+    HOSTCC="ccache clang" \
+    -j"$BUILD_JOBS"
+
+  python3 "$SOURCE_DIR/scripts/clang-tools/gen_compile_commands.py" \
+    -d "$BUILD_DIR" \
+    -o "$BUILD_DIR/compile_commands.json"
+  ruby -rjson -rshellwords -e '
+      entries = JSON.parse(File.read(ARGV.fetch(0)))
+      entries.each do |entry|
+        arguments = entry["arguments"] || Shellwords.shellsplit(entry.fetch("command"))
+        arguments.shift if File.basename(arguments.first) == "ccache"
+        entry.delete("command")
+        entry["arguments"] = arguments
+      end
+      puts JSON.generate(entries)
+    ' "$BUILD_DIR/compile_commands.json" > "$BUILD_DIR/compile_commands.normalized.json"
+  mv "$BUILD_DIR/compile_commands.normalized.json" "$BUILD_DIR/compile_commands.json"
+  test "$(jq length "$BUILD_DIR/compile_commands.json")" -ge 1000
