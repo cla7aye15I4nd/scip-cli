@@ -39,6 +39,8 @@ env:
   CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
   CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
   PAGES_PROJECT: scip-cli
+  R2_BUCKET: scip-cli-data
+  R2_PUBLIC_BASE_URL: https://data.code.dataisland.org
 
 jobs:
   plan:
@@ -57,16 +59,84 @@ jobs:
             exit 1
           fi
 
+      - name: Require R2 access
+        if: github.event_name != 'pull_request'
+        run: npx --yes wrangler@4.107.0 r2 bucket info "$R2_BUCKET"
+
       - name: Restore the previous catalog
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: .github/scripts/restore-state.sh previous-site catalog
+        run: |
+          restored=false
+          if [[ "$GITHUB_EVENT_NAME" == pull_request && -n "$GITHUB_HEAD_REF" ]]; then
+            run_id=$(gh run list \
+              --workflow code-browser.yml \
+              --branch "$GITHUB_HEAD_REF" \
+              --status success \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty')
+            if [[ -n "$run_id" ]] && gh run download "$run_id" --name code-browser-preview --dir previous-site; then
+              echo "Restored preview catalog from run $run_id"
+              restored=true
+            fi
+          fi
+          if [[ "$restored" == false ]]; then
+            run_id=$(gh run list \
+              --workflow code-browser.yml \
+              --branch main \
+              --status success \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty')
+            if [[ -n "$run_id" ]]; then
+              mkdir -p previous-site/generated
+              gh run download "$run_id" --name code-browser-catalog --dir previous-site/generated || true
+              echo "Restored production catalog from run $run_id"
+            fi
+          fi
 
       - name: Select projects
         id: plan
         env:
           FORCE_REBUILD: ${{ inputs.force_rebuild || false }}
-        run: .github/scripts/plan-projects.sh
+        run: |
+          projects='[]'
+          previous_catalog=previous-site/generated/catalog.json
+          while IFS= read -r config; do
+            project=$(ruby -ryaml -rjson -e 'data = YAML.safe_load_file(ARGV[0]); data.delete("build"); puts JSON.generate(data)' "$config")
+            name=$(jq -r .name <<< "$project")
+            if [[ "${config##*/}" != "$name.yaml" ]]; then
+              echo "Project name $name does not match $config" >&2
+              exit 1
+            fi
+            repo_url=$(jq -r .repoUrl <<< "$project")
+            commit=$(git ls-remote "$repo_url" HEAD | awk 'NR == 1 { print $1 }')
+            config_hash=$(sha256sum "$config" | awk '{ print $1 }')
+            project=$(jq --compact-output \
+              --arg commit "$commit" \
+              --arg config_hash "$config_hash" \
+              '. + {commit: $commit, configHash: $config_hash}' <<< "$project")
+            build=true
+            if [[ "$FORCE_REBUILD" != true && -s "$previous_catalog" ]]; then
+              if jq --exit-status \
+                --arg repo_url "$repo_url" \
+                --arg commit "$commit" \
+                '.version == 2 and any(.projects[];
+                  .repoUrl == $repo_url and any(.commits[]; .commit == $commit))' \
+                "$previous_catalog" > /dev/null; then
+                build=false
+                echo "$name is already indexed at $commit" >&2
+              fi
+            fi
+            if [[ "$build" == true ]]; then
+              projects=$(jq --compact-output --argjson project "$project" '. + [$project]' <<< "$projects")
+            fi
+          done < <(find .github/projects -mindepth 1 -maxdepth 1 -name '*.yaml' -type f | sort)
+
+          echo "projects=$projects" >> "$GITHUB_OUTPUT"
+          echo "count=$(jq 'length' <<< "$projects")" >> "$GITHUB_OUTPUT"
+          jq -r '.[].name' <<< "$projects"
 
   prepare:
     needs: plan
@@ -131,7 +201,34 @@ jobs:
       - name: Restore the previous production site
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: .github/scripts/restore-state.sh site
+        run: |
+          restored=false
+          if [[ "$GITHUB_EVENT_NAME" == pull_request && -n "$GITHUB_HEAD_REF" ]]; then
+            run_id=$(gh run list \
+              --workflow code-browser.yml \
+              --branch "$GITHUB_HEAD_REF" \
+              --status success \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty')
+            if [[ -n "$run_id" ]] && gh run download "$run_id" --name code-browser-preview --dir site; then
+              echo "Restored preview state from run $run_id"
+              restored=true
+            fi
+          fi
+          if [[ "$restored" == false ]]; then
+            run_id=$(gh run list \
+              --workflow code-browser.yml \
+              --branch main \
+              --status success \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty')
+            if [[ -n "$run_id" ]]; then
+              gh run download "$run_id" --name code-browser-state --dir site || true
+              echo "Restored production state from run $run_id"
+            fi
+          fi
 
       - name: Download project fragments
         if: needs.plan.outputs.count != '0'
@@ -141,20 +238,68 @@ jobs:
           path: incoming
 
       - name: Assemble site
-        run: .github/scripts/assemble-site.sh site incoming
+        run: |
+          mkdir -p site/assets site/generated
+          cp assets/index.html site/index.html
+          cp assets/index.html site/404.html
+          cp assets/app.js site/assets/app.js
+          cp assets/style.css site/assets/style.css
+          printf '/* /index.html 200\n' > site/_redirects
+
+          catalog=site/generated/catalog.json
+          if [[ ! -s "$catalog" ]] || ! jq --exit-status '.version == 2' "$catalog" > /dev/null; then
+            rm -rf site/generated
+            mkdir -p site/generated
+            printf '{"version":2,"projects":[]}' > "$catalog"
+          fi
+
+          if [[ -d incoming ]]; then
+            while IFS= read -r fragment_catalog; do
+              fragment_dir=${fragment_catalog%/generated/catalog.json}
+              project=$(jq --compact-output '.projects[0]' "$fragment_catalog")
+              slug=$(jq -r .slug <<< "$project")
+              commit=$(jq -r '.commits[0].commit' <<< "$project")
+              mkdir -p "site/generated/$slug"
+              rm -rf "site/generated/$slug/$commit"
+              cp -a "$fragment_dir/generated/$slug/$commit" "site/generated/$slug/$commit"
+              jq --argjson new "$project" '
+                (.projects // []) as $projects |
+                .version = 2 |
+                .projects = (($projects | map(select(.slug != $new.slug))) +
+                  [$new | .commits = .commits[:1]] | sort_by(.slug))
+              ' "$catalog" > "$catalog.tmp"
+              mv "$catalog.tmp" "$catalog"
+            done < <(find incoming -path '*/generated/catalog.json' -type f | sort)
+          fi
+
+          while IFS= read -r project_dir; do
+            slug=${project_dir##*/}
+            while IFS= read -r commit_dir; do
+              commit=${commit_dir##*/}
+              if ! jq --exit-status --arg slug "$slug" --arg commit "$commit" \
+                '.projects[] | select(.slug == $slug) | .commits[0] | select(.commit == $commit)' \
+                "$catalog" > /dev/null; then
+                rm -rf "$commit_dir"
+              fi
+            done < <(find "$project_dir" -mindepth 1 -maxdepth 1 -type d ! -name '.*')
+          done < <(find site/generated -mindepth 1 -maxdepth 1 -type d ! -name '.*')
 
       - name: Validate site
         run: |
           test -s site/generated/catalog.json
           expected_projects=$(find .github/projects -mindepth 1 -maxdepth 1 -name '*.yaml' -type f | wc -l)
+          test "$(jq '.version' site/generated/catalog.json)" -eq 2
           test "$(jq '.projects | length' site/generated/catalog.json)" -eq "$expected_projects"
-          test "$(jq '[.projects[].commits | length] | max' site/generated/catalog.json)" -le 2
-          file_count=$(find site -type f | wc -l)
-          largest_file=$(find site -type f -printf '%s\n' | sort -nr | head -1)
-          test "$file_count" -le 20000
-          test "$largest_file" -le 26214400
+          test "$(jq '[.projects[].commits | length] | max' site/generated/catalog.json)" -eq 1
+          test "$(find site/generated -mindepth 3 -maxdepth 3 -name manifest.json -type f | wc -l)" -eq "$expected_projects"
+          while IFS= read -r manifest; do
+            pack_url=$(jq -r .packUrl "$manifest")
+            if [[ "$pack_url" != https://* ]]; then
+              test -f "site/$pack_url"
+            fi
+          done < <(find site/generated -mindepth 3 -maxdepth 3 -name manifest.json -type f | sort)
           du -sh site
-          echo "Validated $file_count files; largest file is $largest_file bytes"
+          echo "Validated $expected_projects single-version project manifests"
 
       - name: Smoke-test source rendering in Chrome
         run: |
@@ -176,6 +321,47 @@ jobs:
           path: site
           retention-days: 1
 
+      - name: Install Wrangler
+        if: github.event_name != 'pull_request'
+        run: npm install --global wrangler@4.107.0
+
+      - name: Publish immutable project packs to R2
+        if: github.event_name != 'pull_request'
+        run: |
+          uploaded=0
+          while IFS= read -r pack; do
+            key=${pack#site/}
+            manifest=${pack%/data.pack}/manifest.json
+            echo "Uploading $key to R2"
+            wrangler r2 object put "$R2_BUCKET/$key" \
+              --remote \
+              --file "$pack" \
+              --content-type application/octet-stream \
+              --cache-control 'public, max-age=31536000, immutable'
+            pack_url="${R2_PUBLIC_BASE_URL%/}/$key"
+            jq --arg pack_url "$pack_url" '.packUrl = $pack_url' "$manifest" > "$manifest.tmp"
+            mv "$manifest.tmp" "$manifest"
+            rm "$pack"
+            uploaded=$((uploaded + 1))
+          done < <(find site/generated -mindepth 3 -maxdepth 3 -name data.pack -type f | sort)
+          echo "Published $uploaded immutable project packs to R2"
+
+      - name: Validate Pages payload
+        if: github.event_name != 'pull_request'
+        run: |
+          test "$(find site -name data.pack -type f | wc -l)" -eq 0
+          test "$(find site/generated -mindepth 3 -maxdepth 3 -name manifest.json -type f | wc -l)" -eq "$(jq '.projects | length' site/generated/catalog.json)"
+          jq --exit-status --slurp --arg base "${R2_PUBLIC_BASE_URL%/}/" \
+            --slurpfile catalog site/generated/catalog.json '
+              all(.[].packUrl; startswith($base)) and
+              (length == ($catalog[0].projects | length))
+            ' site/generated/*/*/manifest.json > /dev/null
+          file_count=$(find site -type f | wc -l)
+          largest_file=$(find site -type f -printf '%s\n' | sort -nr | head -1)
+          test "$file_count" -le 20000
+          test "$largest_file" -le 26214400
+          echo "Validated Pages payload: $file_count files; largest is $largest_file bytes"
+
       - name: Keep production state
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
@@ -194,9 +380,4 @@ jobs:
 
       - name: Deploy to Cloudflare Pages
         if: github.event_name != 'pull_request'
-        uses: cloudflare/wrangler-action@v3
-        with:
-          accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
-          apiToken: ${{ env.CLOUDFLARE_API_TOKEN }}
-          command: pages deploy site --project-name=${{ env.PAGES_PROJECT }} --branch=main
-          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+        run: wrangler pages deploy site --project-name="$PAGES_PROJECT" --branch=main --commit-dirty=true

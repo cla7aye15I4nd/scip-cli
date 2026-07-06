@@ -547,6 +547,33 @@
     els.code.scrollTop = (selected + 0.5) * LINE_HEIGHT - els.code.clientHeight / 2;
   }
 
+  async function loadPackedFile(file) {
+    if (!("DecompressionStream" in globalThis)) {
+      throw new Error("this browser does not support gzip streams");
+    }
+    const start = Number(file.offset);
+    const length = Number(file.length);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(length) || start < 0 || length <= 0) {
+      throw new Error("source pack index is invalid");
+    }
+    const response = await fetch(new URL(manifest.packUrl, appRoot), {
+      headers: { Range: `bytes=${start}-${start + length - 1}` },
+      cache: "force-cache"
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    let compressed = await response.arrayBuffer();
+    if (response.status === 200 && compressed.byteLength !== length) {
+      if (compressed.byteLength < start + length) throw new Error("source pack is truncated");
+      compressed = compressed.slice(start, start + length);
+    } else if (compressed.byteLength !== length) {
+      throw new Error("source pack range has an unexpected length");
+    }
+    const stream = new Blob([compressed])
+      .stream()
+      .pipeThrough(new DecompressionStream("gzip"));
+    return new Response(stream).json();
+  }
+
   async function openRoute() {
     const target = parseRoute();
     if (target.invalid || target.page === "repositories") {
@@ -604,10 +631,7 @@
         els.empty.className = "empty";
         els.empty.textContent = "Loading source…";
         els.editor.hidden = true;
-        const base = `generated/${encodeURIComponent(target.slug)}/${encodeURIComponent(target.commit)}/files/${file.id}`;
-        const response = await fetch(new URL(`${base}.json`, appRoot));
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        currentData = await response.json();
+        currentData = await loadPackedFile(file);
         currentId = file.id;
         lines = currentData.text.split("\n");
         prepareOccurrences(currentData);
