@@ -1,0 +1,4 @@
+name: double-conversion
+repoUrl: https://github.com/google/double-conversion.git
+build: |
+  exec .github/scripts/build-cmake-project.sh -DBUILD_SHARED_LIBS=OFF

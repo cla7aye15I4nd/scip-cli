@@ -1,0 +1,9 @@
+name: libevent
+repoUrl: https://github.com/libevent/libevent.git
+build: |
+  exec .github/scripts/build-cmake-project.sh \
+    -DEVENT__DISABLE_TESTS=ON \
+    -DEVENT__DISABLE_REGRESS=ON \
+    -DEVENT__DISABLE_SAMPLES=ON \
+    -DEVENT__DISABLE_BENCHMARK=ON \
+    -DEVENT__DISABLE_OPENSSL=ON

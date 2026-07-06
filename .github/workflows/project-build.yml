@@ -34,7 +34,7 @@ jobs:
           sudo apt-get install --yes --no-install-recommends \
             bear clang cmake curl libbrotli-dev libfreetype-dev libjpeg-dev \
             liblzma-dev libpcre2-dev libpng-dev libssl-dev libwebp-dev \
-            ninja-build pkg-config zlib1g-dev
+            ninja-build pkg-config tcl zlib1g-dev
 
       - name: Download scip-clang
         run: |

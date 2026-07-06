@@ -132,7 +132,8 @@ jobs:
       - name: Validate site
         run: |
           test -s site/generated/catalog.json
-          test "$(jq '.projects | length' site/generated/catalog.json)" -eq 10
+          expected_projects=$(find .github/projects -mindepth 1 -maxdepth 1 -name '*.yaml' -type f | wc -l)
+          test "$(jq '.projects | length' site/generated/catalog.json)" -eq "$expected_projects"
           test "$(jq '[.projects[].commits | length] | max' site/generated/catalog.json)" -le 2
           file_count=$(find site -type f | wc -l)
           largest_file=$(find site -type f -printf '%s\n' | sort -nr | head -1)

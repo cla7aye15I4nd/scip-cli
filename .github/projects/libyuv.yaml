@@ -1,0 +1,4 @@
+name: libyuv
+repoUrl: https://chromium.googlesource.com/libyuv/libyuv
+build: |
+  exec .github/scripts/build-cmake-project.sh
