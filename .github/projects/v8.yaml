@@ -22,7 +22,7 @@ build: |
     --revision "source@$(git -C "$SOURCE_DIR" rev-parse HEAD)"
 
   cd "$SOURCE_DIR"
-  gn gen "$BUILD_DIR" --args='is_debug=false
+  gn gen "$BUILD_DIR" --export-compile-commands --args='is_debug=false
     symbol_level=0
     v8_symbol_level=0
     is_component_build=false
@@ -34,14 +34,14 @@ build: |
     cc_wrapper="ccache"'
   autoninja -C "$BUILD_DIR" v8_monolith -j "$BUILD_JOBS"
 
-  ninja -C "$BUILD_DIR" -t compdb cxx cc |
-    ruby -rjson -e '
+  ruby -rjson -e '
       root = File.expand_path(ARGV.fetch(0)) + File::SEPARATOR
       seen = {}
-      entries = JSON.parse(STDIN.read).select do |entry|
+      entries = JSON.parse(File.read(ARGV.fetch(1))).select do |entry|
         path = File.expand_path(entry.fetch("file"), entry.fetch("directory", root))
         path.start_with?(root) && !seen[path] && (seen[path] = true)
       end
       puts JSON.generate(entries)
-    ' "$SOURCE_DIR" > "$BUILD_DIR/compile_commands.json"
+    ' "$SOURCE_DIR" "$BUILD_DIR/compile_commands.json" > "$BUILD_DIR/compile_commands.filtered.json"
+  mv "$BUILD_DIR/compile_commands.filtered.json" "$BUILD_DIR/compile_commands.json"
   test "$(jq length "$BUILD_DIR/compile_commands.json")" -ge 500
