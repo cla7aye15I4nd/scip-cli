@@ -9,11 +9,12 @@
 - `src/`: SCIP-to-static-site conversion only.
 - `assets/`: static browser shell. Use hash routes so static hosts need no SPA rewrite.
 - `.github/projects/*.yaml`: one self-contained definition per indexed project.
-- `.github/workflows/code-browser.yml`: inline project planning, state restore, fragment assembly, validation, R2 publication, and Pages deployment.
+- `.github/workflows/code-browser.yml`: inline project planning, state restore, fragment assembly, validation, R2 publication, Worker deployment, and Pages deployment.
+- `worker/r2-data.js`: the narrow same-origin `/data/` gateway to immutable R2 packs.
 - `.github/workflows/project-build.yml`: inline reusable workflow for one project.
 - `.github/scripts/build-cmake-project.sh`: the only shared project build helper; workflow orchestration belongs directly in YAML.
 
-The planner compares every upstream HEAD with the previous version-2 catalog and does not spawn a build when that commit is already indexed. Pull requests prefer their own last successful preview state, allowing projects to be added in verified batches without rebuilding earlier batches. The assembler exposes exactly one current commit per repository. Production state contains only the Pages shell, catalog, and manifests; immutable compressed source packs live in R2.
+The planner compares every upstream HEAD with the previous version-2 catalog and does not spawn a build when that commit is already indexed. Pull requests prefer their own last successful preview state, allowing projects to be added in verified batches without rebuilding earlier batches. The assembler exposes exactly one current commit per repository. Production state contains only the browser shell, catalog, and manifests; immutable compressed source packs live in R2.
 
 ## Project definitions
 
@@ -35,8 +36,8 @@ Choose small, independently buildable C or C++ repositories with meaningful atta
 - Store each source file as an independently gzip-compressed JSON record inside one immutable pack per project commit. The manifest must carry exact byte offsets and lengths so the browser can issue one Range request per source file.
 - Preserve atomic catalog and commit publication.
 - Expose exactly one commit per project. Old content-addressed R2 objects may remain briefly for safe rollout, but must not remain in the catalog.
-- Keep Pages limited to the browser shell, catalog, and manifests. Publish data packs to the `scip-cli-data` R2 bucket and serve them from `https://data.code.dataisland.org`.
-- Cloudflare Pages limits remain no more than 20,000 files and no individual file over 25 MiB; R2 packs are not subject to the Pages file-size limit.
+- Keep the browser shell, catalog, and manifests on Pages. Publish immutable packs to the `scip-cli-data` R2 bucket and expose them only through the Worker route `https://code.dataisland.org/data/*`.
+- Keep pack URLs rooted at `/data/`. Never split authenticated browser requests across another hostname and do not enable a public R2 custom domain.
 - Do not introduce a dynamic application backend, generated JavaScript data copies, vulnerability views, or build orchestration into the CLI.
 
 ## Validation
@@ -58,7 +59,7 @@ Also parse every project YAML, syntax-check its embedded `build` block, run Shel
 - UI branding is `SCIP-CLI`.
 - Keep README short and user-facing; do not document CI internals there.
 - Publish changes through a focused PR and preserve unrelated worktree changes.
-- Production is the Cloudflare Pages project `scip-cli`, with canonical custom domain `code.dataisland.org`.
-- Project packs are immutable R2 objects under `data.code.dataisland.org`, protected by the same multi-domain Cloudflare Access application as `code.dataisland.org`. Never connect the R2 custom domain before the Access policy exists.
-- Configure credentialed CORS from `https://code.dataisland.org`, allow the `Range` request header, and expose `Accept-Ranges`, `Content-Length`, `Content-Range`, and `ETag`.
+- Production is the Cloudflare Pages project `scip-cli`, with canonical custom domain `code.dataisland.org` protected by Cloudflare Access.
+- The `scip-cli-data-proxy` Worker owns only the `code.dataisland.org/data/*` route and has an R2 binding named `DATA`.
+- Preserve byte-range responses through the Worker. No CORS policy is required because all browser requests are same-origin.
 - Production workflows must fail before building when Cloudflare credentials or R2 access are missing; never silently skip deployment.
