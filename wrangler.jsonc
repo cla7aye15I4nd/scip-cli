@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "scip-cli-data-proxy",
+  "main": "worker/r2-data.js",
+  "compatibility_date": "2026-07-05",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "code.dataisland.org/data/*",
+      "zone_name": "dataisland.org"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "DATA",
+      "bucket_name": "scip-cli-data"
+    }
+  ]
+}
