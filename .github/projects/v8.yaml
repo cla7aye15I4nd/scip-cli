@@ -45,3 +45,14 @@ build: |
     ' "$SOURCE_DIR" "$BUILD_DIR/compile_commands.json" > "$BUILD_DIR/compile_commands.filtered.json"
   mv "$BUILD_DIR/compile_commands.filtered.json" "$BUILD_DIR/compile_commands.json"
   test "$(jq length "$BUILD_DIR/compile_commands.json")" -ge 500
+
+  jq '[.[0]]' "$BUILD_DIR/compile_commands.json" > "$BUILD_DIR/compile_commands.debug.json"
+  (
+    cd "$SOURCE_DIR"
+    "$GITHUB_WORKSPACE/bin/scip-clang" \
+      --compdb-path="$BUILD_DIR/compile_commands.debug.json" \
+      --index-output-path="$RUNNER_TEMP/v8-debug.scip" \
+      --jobs=1 \
+      --show-compiler-diagnostics \
+      --no-progress-report
+  ) || true
