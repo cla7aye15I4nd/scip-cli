@@ -38,9 +38,7 @@ permissions:
 env:
   CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
   CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-  PAGES_PROJECT: scip-cli
   R2_BUCKET: scip-cli-data
-  R2_PUBLIC_BASE_URL: https://data.code.dataisland.org
 
 jobs:
   plan:
@@ -244,7 +242,6 @@ jobs:
           cp assets/index.html site/404.html
           cp assets/app.js site/assets/app.js
           cp assets/style.css site/assets/style.css
-          printf '/* /index.html 200\n' > site/_redirects
 
           catalog=site/generated/catalog.json
           if [[ ! -s "$catalog" ]] || ! jq --exit-status '.version == 2' "$catalog" > /dev/null; then
@@ -272,6 +269,13 @@ jobs:
             done < <(find incoming -path '*/generated/catalog.json' -type f | sort)
           fi
 
+          while IFS= read -r manifest; do
+            commit_dir=${manifest%/manifest.json}
+            pack_url="${commit_dir#site/}/data.pack"
+            jq --arg pack_url "$pack_url" '.packUrl = $pack_url' "$manifest" > "$manifest.tmp"
+            mv "$manifest.tmp" "$manifest"
+          done < <(find site/generated -mindepth 3 -maxdepth 3 -name manifest.json -type f | sort)
+
           while IFS= read -r project_dir; do
             slug=${project_dir##*/}
             while IFS= read -r commit_dir; do
@@ -294,24 +298,31 @@ jobs:
           test "$(find site/generated -mindepth 3 -maxdepth 3 -name manifest.json -type f | wc -l)" -eq "$expected_projects"
           while IFS= read -r manifest; do
             pack_url=$(jq -r .packUrl "$manifest")
-            if [[ "$pack_url" != https://* ]]; then
-              test -f "site/$pack_url"
-            fi
+            expected="${manifest%/manifest.json}/data.pack"
+            test "$pack_url" = "${expected#site/}"
           done < <(find site/generated -mindepth 3 -maxdepth 3 -name manifest.json -type f | sort)
           du -sh site
           echo "Validated $expected_projects single-version project manifests"
 
       - name: Smoke-test source rendering in Chrome
+        if: needs.plan.outputs.count != '0'
         run: |
-          commit=$(jq -r '.projects[] | select(.slug == "github-com-madler-zlib") | .commits[0].commit' site/generated/catalog.json)
+          pack=$(find site/generated -mindepth 3 -maxdepth 3 -name data.pack -type f -print -quit)
+          test -n "$pack"
+          commit_dir=${pack%/data.pack}
+          manifest=$commit_dir/manifest.json
+          commit=${commit_dir##*/}
+          slug=${commit_dir%/*}
+          slug=${slug##*/}
+          source_path=$(jq -r '.files[0].path' "$manifest")
           python3 -m http.server 8080 --directory site > "$RUNNER_TEMP/http.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid"' EXIT
           timeout --signal=TERM 45s google-chrome --headless --no-sandbox --disable-gpu \
             --virtual-time-budget=5000 --dump-dom \
-            "http://127.0.0.1:8080/#/github-com-madler-zlib/$commit/adler32.c?line=0" \
+            "http://127.0.0.1:8080/#/$slug/$commit/$source_path?line=0" \
             > "$RUNNER_TEMP/source-dom.html"
-          grep --quiet "compute the Adler-32 checksum" "$RUNNER_TEMP/source-dom.html"
+          grep --quiet 'class="source"' "$RUNNER_TEMP/source-dom.html"
 
       - name: Keep preview artifact
         if: github.event_name == 'pull_request'
@@ -325,42 +336,43 @@ jobs:
         if: github.event_name != 'pull_request'
         run: npm install --global wrangler@4.107.0
 
-      - name: Publish immutable project packs to R2
+      - name: Deploy site to R2
         if: github.event_name != 'pull_request'
         run: |
           uploaded=0
-          while IFS= read -r pack; do
-            key=${pack#site/}
-            manifest=${pack%/data.pack}/manifest.json
+          upload_file() {
+            file=$1
+            key=${file#site/}
+            case "$file" in
+              *.html) content_type='text/html; charset=utf-8' ;;
+              *.js) content_type='text/javascript; charset=utf-8' ;;
+              *.css) content_type='text/css; charset=utf-8' ;;
+              *.json) content_type='application/json' ;;
+              *.pack) content_type='application/octet-stream' ;;
+              *) content_type='application/octet-stream' ;;
+            esac
+            if [[ "$file" == *.pack ]]; then
+              cache_control='public, max-age=31536000, immutable'
+            else
+              cache_control='no-cache'
+            fi
             echo "Uploading $key to R2"
             wrangler r2 object put "$R2_BUCKET/$key" \
               --remote \
-              --file "$pack" \
-              --content-type application/octet-stream \
-              --cache-control 'public, max-age=31536000, immutable'
-            pack_url="${R2_PUBLIC_BASE_URL%/}/$key"
-            jq --arg pack_url "$pack_url" '.packUrl = $pack_url' "$manifest" > "$manifest.tmp"
-            mv "$manifest.tmp" "$manifest"
-            rm "$pack"
+              --file "$file" \
+              --content-type "$content_type" \
+              --cache-control "$cache_control"
             uploaded=$((uploaded + 1))
-          done < <(find site/generated -mindepth 3 -maxdepth 3 -name data.pack -type f | sort)
-          echo "Published $uploaded immutable project packs to R2"
+          }
 
-      - name: Validate Pages payload
-        if: github.event_name != 'pull_request'
-        run: |
-          test "$(find site -name data.pack -type f | wc -l)" -eq 0
-          test "$(find site/generated -mindepth 3 -maxdepth 3 -name manifest.json -type f | wc -l)" -eq "$(jq '.projects | length' site/generated/catalog.json)"
-          jq --exit-status --slurp --arg base "${R2_PUBLIC_BASE_URL%/}/" \
-            --slurpfile catalog site/generated/catalog.json '
-              all(.[].packUrl; startswith($base)) and
-              (length == ($catalog[0].projects | length))
-            ' site/generated/*/*/manifest.json > /dev/null
-          file_count=$(find site -type f | wc -l)
-          largest_file=$(find site -type f -printf '%s\n' | sort -nr | head -1)
-          test "$file_count" -le 20000
-          test "$largest_file" -le 26214400
-          echo "Validated Pages payload: $file_count files; largest is $largest_file bytes"
+          while IFS= read -r file; do upload_file "$file"; done \
+            < <(find site/generated -name data.pack -type f | sort)
+          while IFS= read -r file; do upload_file "$file"; done \
+            < <(find site -type f ! -path 'site/generated/catalog.json' ! -name data.pack | sort)
+          upload_file site/generated/catalog.json
+          echo "Deployed $uploaded site objects to R2"
+
+          find site -name data.pack -type f -delete
 
       - name: Keep production state
         if: github.event_name != 'pull_request'
@@ -377,7 +389,3 @@ jobs:
           name: code-browser-catalog
           path: site/generated/catalog.json
           retention-days: 14
-
-      - name: Deploy to Cloudflare Pages
-        if: github.event_name != 'pull_request'
-        run: wrangler pages deploy site --project-name="$PAGES_PROJECT" --branch=main --commit-dirty=true
