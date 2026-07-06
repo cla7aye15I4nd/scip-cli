@@ -26,4 +26,4 @@ commands:
   - name: Build and capture the compilation database
     cwd: "{repo_dir}/{build_dir}"
     run: |
-      bear --append -o "{repo_dir}/{build_dir}/compile_commands.json" -- make -j{jobs} {make_args}
+      bear --append --output "{repo_dir}/{build_dir}/compile_commands.json" -- make -j{jobs} {make_args}

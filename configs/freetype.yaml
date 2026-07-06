@@ -1,0 +1,9 @@
+extends: bases/cmake-ninja.yaml
+name: freetype
+description: FreeType font rasterizer used by Chromium
+repository:
+  url: https://gitlab.freedesktop.org/freetype/freetype.git
+  directory: freetype
+  depth: 1
+variables:
+  cmake_args: -DCMAKE_BUILD_TYPE=Release

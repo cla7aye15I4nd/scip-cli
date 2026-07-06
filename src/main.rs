@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand};
 use crate::config::{find_profile, load_profiles};
 use crate::generator::{GenerateOptions, Generator};
 use crate::template::Variables;
-use scip_cli::{BuildOptions, build as build_site};
+use scip_cli::{BuildOptions, build as build_site, initialize_site};
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -256,7 +256,12 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn generate_all(config_dir: &Path, repository: Option<&str>, web_root: PathBuf, options: GenerateOptions) -> Result<()> {
+fn generate_all(
+    config_dir: &Path,
+    repository: Option<&str>,
+    web_root: PathBuf,
+    options: GenerateOptions,
+) -> Result<()> {
     if options.jobs == 0 || options.index_jobs == 0 {
         anyhow::bail!("--jobs and --index-jobs must be greater than zero");
     }
@@ -276,6 +281,11 @@ fn generate_all(config_dir: &Path, repository: Option<&str>, web_root: PathBuf, 
         profiles.len(),
         web_root.display()
     );
+    let repositories = profiles
+        .iter()
+        .map(|(_, profile)| render_repository_url(profile))
+        .collect::<Result<Vec<_>>>()?;
+    initialize_site(&web_root, &repositories, repository.is_none())?;
     let mut failures = Vec::new();
     let mut generated = 0;
     for (path, profile) in profiles {

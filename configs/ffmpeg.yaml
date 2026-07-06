@@ -7,8 +7,3 @@ repository:
   url: https://github.com/FFmpeg/FFmpeg.git
   directory: ffmpeg
   depth: 1
-
-variables:
-  configure_args: >-
-    --disable-debug
-    --disable-doc

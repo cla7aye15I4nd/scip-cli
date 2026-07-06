@@ -9,11 +9,15 @@ variables:
 commands:
   - name: Configure CMake project
     cwd: "{repo_dir}"
-    run: >-
-      cmake -S "{repo_dir}/{source_dir}" -B "{repo_dir}/{build_dir}" -G Ninja
-      -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-      -DCMAKE_C_COMPILER_LAUNCHER=ccache
-      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+    run: |
+      rm -f "{repo_dir}/{build_dir}/CMakeCache.txt"
+      rm -rf "{repo_dir}/{build_dir}/CMakeFiles"
+      cmake -S "{repo_dir}/{source_dir}" -B "{repo_dir}/{build_dir}" -G Ninja \
+      -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+      -DCMAKE_C_COMPILER=clang \
+      -DCMAKE_CXX_COMPILER=clang++ \
+      -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
       {cmake_args}
 
   - name: Build CMake project and generated sources
@@ -22,6 +26,12 @@ commands:
       cmake --build "{repo_dir}/{build_dir}"
       --parallel {jobs}
       {build_args}
+
+  - name: Ensure a CMake compilation database exists
+    cwd: "{repo_dir}"
+    run: |
+      test -s "{repo_dir}/{build_dir}/compile_commands.json" || \
+        ninja -C "{repo_dir}/{build_dir}" -t compdb > "{repo_dir}/{build_dir}/compile_commands.json"
 
 index:
   compilation_database: "{repo_dir}/{build_dir}/compile_commands.json"

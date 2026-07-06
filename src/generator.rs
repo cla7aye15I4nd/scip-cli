@@ -106,14 +106,23 @@ impl Generator {
     fn cache_key(&self) -> Result<String> {
         let commit = git_head(&self.repo_dir)?;
         let profile = serde_json::to_string(&self.profile)?;
-        Ok(format!("scip-clang={SCIP_CLANG_VERSION}\ncommit={commit}\nprofile={profile}\n"))
+        Ok(format!(
+            "scip-clang={SCIP_CLANG_VERSION}\ncommit={commit}\nprofile={profile}\n"
+        ))
     }
 
     fn cache_path(&self) -> PathBuf {
-        self.options.output_dir.join(format!(".{}.scip-cache", self.profile.name))
+        self.options
+            .output_dir
+            .join(format!(".{}.scip-cache", self.profile.name))
     }
 
-    fn cached_index_is_current(&self, output: &Path, key: &str, checkout_changed: bool) -> Result<bool> {
+    fn cached_index_is_current(
+        &self,
+        output: &Path,
+        key: &str,
+        checkout_changed: bool,
+    ) -> Result<bool> {
         if self.options.dry_run || !output.is_file() || fs::metadata(output)?.len() < 1024 {
             return Ok(false);
         }
@@ -217,8 +226,24 @@ impl Generator {
 
     fn clone_repository(&self) -> Result<bool> {
         let repository = self.variables.render(&self.profile.repository.url)?;
-        let existing_checkout = self.repo_dir.join(".git").is_dir();
-        let previous_head = existing_checkout.then(|| git_head(&self.repo_dir)).transpose()?;
+        let git_directory = self.repo_dir.join(".git");
+        let previous_head = git_directory
+            .is_dir()
+            .then(|| git_head(&self.repo_dir).ok())
+            .flatten();
+        let existing_checkout = previous_head.is_some();
+        if git_directory.exists() && !existing_checkout {
+            println!(
+                "==> Removing incomplete checkout {}",
+                self.repo_dir.display()
+            );
+            fs::remove_dir_all(&self.repo_dir).with_context(|| {
+                format!(
+                    "failed to remove incomplete checkout {}",
+                    self.repo_dir.display()
+                )
+            })?;
+        }
         if existing_checkout {
             println!("==> Using checkout {}", self.repo_dir.display());
         } else {
@@ -227,6 +252,11 @@ impl Generator {
                     "checkout path exists but is not a Git repository: {}",
                     self.repo_dir.display()
                 );
+            }
+            if let Some(parent) = self.repo_dir.parent() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("failed to create checkout parent {}", parent.display())
+                })?;
             }
             println!("==> Cloning {repository}");
             self.run_program(
@@ -261,6 +291,14 @@ impl Generator {
             )?;
         } else if existing_checkout {
             println!("==> Fetching the latest upstream revision");
+            for lock in ["shallow.lock", "index.lock"] {
+                let path = git_directory.join(lock);
+                if path.is_file() {
+                    fs::remove_file(&path).with_context(|| {
+                        format!("failed to remove stale lock {}", path.display())
+                    })?;
+                }
+            }
             self.run_program(
                 "git",
                 &[
@@ -278,7 +316,11 @@ impl Generator {
                 Some(&self.repo_dir),
             )?;
         }
-        let current_head = if self.options.dry_run { previous_head.clone() } else { Some(git_head(&self.repo_dir)?) };
+        let current_head = if self.options.dry_run {
+            previous_head.clone()
+        } else {
+            Some(git_head(&self.repo_dir)?)
+        };
         Ok(!existing_checkout || previous_head != current_head)
     }
 
@@ -370,9 +412,16 @@ impl Generator {
 
     fn output_path(&self) -> Result<PathBuf> {
         let rendered = PathBuf::from(self.variables.render(&self.profile.index.output)?);
-        let output = if rendered.is_absolute() { rendered } else { self.options.output_dir.join(rendered) };
+        let output = if rendered.is_absolute() {
+            rendered
+        } else {
+            self.options.output_dir.join(rendered)
+        };
         if !output.starts_with(&self.options.output_dir) {
-            bail!("profile output must remain under --output-dir: {}", output.display());
+            bail!(
+                "profile output must remain under --output-dir: {}",
+                output.display()
+            );
         }
         Ok(output)
     }

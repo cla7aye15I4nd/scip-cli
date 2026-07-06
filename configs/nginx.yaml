@@ -1,11 +1,14 @@
 version: 1
+name: nginx
+description: NGINX HTTP and reverse proxy server
+
+repository:
+  url: https://github.com/nginx/nginx.git
+  directory: nginx
+  depth: 1
 
 variables:
   build_dir: build-scip
-  bootstrap_command: ":"
-  configure_script: configure
-  configure_args: ""
-  make_args: ""
   compiledb_venv: "{tools_dir}/compiledb-venv"
   compiledb_version: "0.10.7"
 
@@ -22,25 +25,21 @@ commands:
         "{compiledb_venv}/bin/pip" install "compiledb=={compiledb_version}"
       fi
 
-  - name: Bootstrap configure scripts
+  - name: Configure NGINX
     cwd: "{repo_dir}"
-    run: "{bootstrap_command}"
+    run: >-
+      CC="ccache clang" ./auto/configure
+      --with-cc=clang
+      --with-cc-opt=-O2
 
-  - name: Configure Make project
+  - name: Build NGINX and capture the compilation database
     cwd: "{repo_dir}"
-    run: |
-      mkdir -p "{repo_dir}/{build_dir}"
-      cd "{repo_dir}/{build_dir}"
-      CC="ccache clang" CXX="ccache clang++" "{repo_dir}/{configure_script}" {configure_args}
-
-  - name: Build and capture the compilation database
-    cwd: "{repo_dir}/{build_dir}"
     run: >-
       compiledb -o "{repo_dir}/{build_dir}/compile_commands.json"
-      make -j{jobs} {make_args}
+      make -j{jobs}
 
 index:
   compilation_database: "{repo_dir}/{build_dir}/compile_commands.json"
-  output: "{output_dir}/{name}.scip"
+  output: "{output_dir}/nginx.scip"
   arguments:
     - --no-progress-report

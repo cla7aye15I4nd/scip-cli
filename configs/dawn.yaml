@@ -1,0 +1,37 @@
+extends: bases/cmake-ninja.yaml
+name: dawn
+description: Dawn WebGPU implementation used by Chromium
+repository:
+  url: https://dawn.googlesource.com/dawn.git
+  directory: dawn
+  depth: 1
+variables:
+  cmake_args: >-
+    -DCMAKE_BUILD_TYPE=Release
+    -DDAWN_FETCH_DEPENDENCIES=ON
+    -DDAWN_BUILD_TESTS=OFF
+    -DTINT_BUILD_TESTS=OFF
+commands:
+  - name: Configure Dawn
+    run: |
+      rm -f "{repo_dir}/{build_dir}/CMakeCache.txt"
+      rm -rf "{repo_dir}/{build_dir}/CMakeFiles"
+      cmake -S "{repo_dir}" -B "{repo_dir}/{build_dir}" -G Ninja \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+        -DCMAKE_C_COMPILER=clang \
+        -DCMAKE_CXX_COMPILER=clang++ \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+        {cmake_args}
+  - name: Build Dawn and generated sources
+    run: cmake --build "{repo_dir}/{build_dir}" --parallel {jobs}
+  - name: Normalize Dawn compilation database for scip-clang
+    run: |
+      jq 'map(if .command then
+        .command |= gsub(" -Winvalid-pch"; "")
+        | .command |= gsub(" -Xclang -include-pch -Xclang [^ ]+"; "")
+        | .command |= gsub(" -Xclang -include -Xclang [^ ]+cmake_pch\\.hxx"; "")
+      else . end)' \
+        "{build_dir}/compile_commands.json" > "{build_dir}/compile_commands.scip.json"
+index:
+  compilation_database: "{repo_dir}/{build_dir}/compile_commands.scip.json"

@@ -239,7 +239,7 @@
   }
 
   function isFunctionSymbol(symbol) {
-    return Boolean(symbol) && !symbol.startsWith("local ") && /\\([^)]*\\)\\.$/.test(symbol);
+    return Boolean(symbol) && !symbol.startsWith("local ") && /\([^)]*\)\.$/.test(symbol);
   }
 
   function functionMarkdown(item) {

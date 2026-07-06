@@ -1,19 +1,13 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use protobuf::Message;
-use scip::types::{
-    Document, Index, Occurrence, PositionEncoding, SymbolInformation, SyntaxKind, occurrence,
-    symbol_information,
-};
+use scip::types::{Document, Index, Occurrence, PositionEncoding, SymbolInformation, occurrence};
 use serde::Serialize;
 use url::Url;
-
-use crate::function_docs::{
-    FUNCTION_INDEX_VERSION, FunctionIndex, FunctionRecord, source_hash, stable_doc_key,
-};
 
 const DEFINITION_ROLE: i32 = 1;
 
@@ -33,6 +27,82 @@ pub struct BuildReport {
     pub warnings: Vec<String>,
 }
 
+/// Publish the application shell and register repositories before their indexes
+/// are built. This keeps configured repositories visible as "Not indexed" while
+/// a long-running initial build is in progress.
+pub fn initialize_site(web_root: &Path, repositories: &[String], prune: bool) -> Result<()> {
+    write_site_shell(web_root)?;
+    fs::create_dir_all(web_root.join("generated"))?;
+    let path = web_root.join("generated/catalog.json");
+    let mut catalog: Catalog = match fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .with_context(|| format!("failed to parse {}", path.display()))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Catalog {
+            version: 1,
+            projects: Vec::new(),
+        },
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", path.display()));
+        }
+    };
+    catalog.version = 1;
+    if prune {
+        let configured = repositories
+            .iter()
+            .map(|url| slug_repo_url(url))
+            .collect::<Result<Vec<_>>>()?;
+        catalog
+            .projects
+            .retain(|project| configured.contains(&project.slug));
+    }
+    for repo_url in repositories {
+        let slug = slug_repo_url(repo_url)?;
+        if let Some(project) = catalog.projects.iter().find(|item| item.slug == slug) {
+            if project.repo_url != repo_url.as_str() {
+                bail!(
+                    "repository slug collision: {repo_url:?} and {:?} both become {slug:?}",
+                    project.repo_url
+                );
+            }
+            continue;
+        }
+        catalog.projects.push(CatalogProject {
+            slug,
+            repo_url: repo_url.clone(),
+            commits: Vec::new(),
+        });
+    }
+    catalog.projects.sort_by(|a, b| a.slug.cmp(&b.slug));
+    write_json(&path, &catalog)?;
+    write_javascript(
+        &web_root.join("generated/catalog.js"),
+        "__SCIP_CATALOG__",
+        &catalog,
+    )
+}
+
+fn write_site_shell(web_root: &Path) -> Result<()> {
+    fs::create_dir_all(web_root.join("assets"))?;
+    fs::write(
+        web_root.join("index.html"),
+        include_str!("../assets/index.html"),
+    )?;
+    fs::write(
+        web_root.join("404.html"),
+        include_str!("../assets/index.html"),
+    )?;
+    fs::write(web_root.join("_redirects"), "/* /index.html 200\n")?;
+    fs::write(
+        web_root.join("assets/app.js"),
+        include_str!("../assets/app.js"),
+    )?;
+    fs::write(
+        web_root.join("assets/style.css"),
+        include_str!("../assets/style.css"),
+    )?;
+    Ok(())
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Range {
     start_line: usize,
@@ -48,12 +118,12 @@ struct Definition {
     character: usize,
 }
 
-struct Definitions {
-    global: HashMap<String, Definition>,
-    local: Vec<HashMap<String, Definition>>,
+struct Definitions<'a> {
+    global: HashMap<&'a str, Definition>,
+    local: Vec<HashMap<&'a str, Definition>>,
 }
 
-impl Definitions {
+impl<'a> Definitions<'a> {
     fn new(file_count: usize) -> Self {
         Self {
             global: HashMap::new(),
@@ -61,13 +131,13 @@ impl Definitions {
         }
     }
 
-    fn insert(&mut self, file: usize, symbol: &str, definition: Definition) {
+    fn insert(&mut self, file: usize, symbol: &'a str, definition: Definition) {
         let map = if symbol.starts_with("local ") {
             &mut self.local[file]
         } else {
             &mut self.global
         };
-        map.entry(symbol.to_owned()).or_insert(definition);
+        map.entry(symbol).or_insert(definition);
     }
 
     fn get(&self, file: usize, symbol: &str) -> Option<&Definition> {
@@ -129,11 +199,11 @@ struct FileData<'a> {
     language: &'a str,
     text: &'a str,
     symbols: Vec<&'a str>,
+    docs: BTreeMap<&'a str, String>,
     /// [start line, start UTF-16 column, end line, end UTF-16 column,
     ///  local symbol id, target file, target line, target UTF-16 column, roles,
     ///  SCIP syntax kind]
     occurrences: Vec<[i64; 10]>,
-    function_doc_keys: BTreeMap<String, String>,
 }
 
 pub fn build(options: BuildOptions) -> Result<BuildReport> {
@@ -142,6 +212,7 @@ pub fn build(options: BuildOptions) -> Result<BuildReport> {
     let bytes = fs::read(&options.input)
         .with_context(|| format!("failed to read {}", options.input.display()))?;
     let mut index = Index::parse_from_bytes(&bytes).context("failed to decode SCIP protobuf")?;
+    drop(bytes);
     if index.documents.is_empty() {
         bail!("SCIP index contains no documents");
     }
@@ -155,46 +226,20 @@ pub fn build(options: BuildOptions) -> Result<BuildReport> {
     let source_root = options.source_root.or_else(|| infer_source_root(&index));
     let sources: Vec<String> = index
         .documents
-        .iter()
+        .iter_mut()
         .map(|document| read_source(document, source_root.as_deref(), &mut warnings))
         .collect::<Result<_>>()?;
 
     let definitions = collect_definitions(&index.documents, &sources);
-    let function_index = collect_function_index(&repo_slug, &options.commit, &index, &sources);
-    let generated = options
-        .web_root
-        .join("generated")
-        .join(&repo_slug)
-        .join(&options.commit);
-    fs::create_dir_all(options.web_root.join("assets"))?;
+    let project_root = options.web_root.join("generated").join(&repo_slug);
+    prune_old_commits(&project_root, &options.commit)?;
+    let generated = project_root.join(&options.commit);
+    write_site_shell(&options.web_root)?;
     fs::create_dir_all(generated.join("files"))?;
-    fs::write(
-        options.web_root.join("index.html"),
-        include_str!("../assets/index.html"),
-    )?;
-    fs::write(
-        options.web_root.join("404.html"),
-        include_str!("../assets/index.html"),
-    )?;
-    fs::write(options.web_root.join("_redirects"), "/* /index.html 200\n")?;
-    fs::write(
-        options.web_root.join("assets/app.js"),
-        include_str!("../assets/app.js"),
-    )?;
-    fs::write(
-        options.web_root.join("assets/style.css"),
-        include_str!("../assets/style.css"),
-    )?;
 
     let mut occurrence_count = 0;
     for (file_id, document) in index.documents.iter().enumerate() {
-        let data = make_file_data(
-            file_id,
-            document,
-            &sources[file_id],
-            &definitions,
-            &function_index,
-        );
+        let data = make_file_data(file_id, document, &sources[file_id], &definitions);
         occurrence_count += data.occurrences.len();
         write_json(&generated.join(format!("files/{file_id}.json")), &data)?;
         write_javascript(
@@ -228,7 +273,6 @@ pub fn build(options: BuildOptions) -> Result<BuildReport> {
         "__SCIP_MANIFEST__",
         &manifest,
     )?;
-    write_json(&generated.join("functions.json"), &function_index)?;
     update_catalog(
         &options.web_root,
         &repo_slug,
@@ -256,19 +300,23 @@ fn deduplicate_documents(
 ) -> Vec<Document> {
     documents.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
     let mut unique = Vec::with_capacity(documents.len());
+    let mut needs_deduplication = Vec::with_capacity(documents.len());
     let mut duplicates = 0usize;
 
     for document in documents {
         let Some(existing) = unique.last_mut() else {
             unique.push(document);
+            needs_deduplication.push(false);
             continue;
         };
         if existing.relative_path != document.relative_path {
             unique.push(document);
+            needs_deduplication.push(false);
             continue;
         }
 
         duplicates += 1;
+        *needs_deduplication.last_mut().unwrap() = true;
         if existing.position_encoding != document.position_encoding {
             if document.occurrences.len() > existing.occurrences.len() {
                 *existing = document;
@@ -288,15 +336,13 @@ fn deduplicate_documents(
         }
         existing.occurrences.extend(document.occurrences);
         existing.symbols.extend(document.symbols);
+    }
 
-        existing
-            .occurrences
-            .sort_by_cached_key(|item| item.write_to_bytes().unwrap_or_default());
-        existing.occurrences.dedup();
-        existing
-            .symbols
-            .sort_by_cached_key(|item| item.write_to_bytes().unwrap_or_default());
-        existing.symbols.dedup();
+    for (document, needed) in unique.iter_mut().zip(needs_deduplication) {
+        if needed {
+            deduplicate_messages(&mut document.occurrences);
+            deduplicate_messages(&mut document.symbols);
+        }
     }
 
     if duplicates > 0 {
@@ -308,11 +354,50 @@ fn deduplicate_documents(
     unique
 }
 
+fn deduplicate_messages<T>(values: &mut Vec<T>)
+where
+    T: Message,
+{
+    let mut seen = HashSet::<(u64, u64)>::with_capacity(values.len());
+    values.retain(|value| {
+        let bytes = value.write_to_bytes().unwrap_or_default();
+        let mut first = DefaultHasher::new();
+        bytes.hash(&mut first);
+        let mut second = DefaultHasher::new();
+        1_u8.hash(&mut second);
+        bytes.hash(&mut second);
+        seen.insert((first.finish(), second.finish()))
+    });
+}
+
 fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     let file =
         fs::File::create(path).with_context(|| format!("failed to create {}", path.display()))?;
     serde_json::to_writer(file, value)
         .with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn prune_old_commits(project_root: &Path, current_commit: &str) -> Result<()> {
+    let entries = match fs::read_dir(project_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to read {}", project_root.display()));
+        }
+    };
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() && entry.file_name() != current_commit {
+            fs::remove_dir_all(entry.path()).with_context(|| {
+                format!(
+                    "failed to remove old commit data {}",
+                    entry.path().display()
+                )
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn write_javascript(path: &Path, variable: &str, value: &impl Serialize) -> Result<()> {
@@ -369,10 +454,8 @@ fn update_catalog(
         file_count,
         occurrence_count,
     };
-    project.commits.retain(|item| item.commit != commit);
-    // Generation order, rather than lexical SHA order, defines the current revision.
-    // Historical revisions remain addressable by URL but are not promoted in the UI.
-    project.commits.insert(0, entry);
+    project.commits.clear();
+    project.commits.push(entry);
     catalog.projects.sort_by(|a, b| a.slug.cmp(&b.slug));
     write_json(&path, &catalog)?;
     write_javascript(
@@ -448,14 +531,17 @@ fn infer_source_root(index: &Index) -> Option<PathBuf> {
 }
 
 fn read_source(
-    document: &Document,
+    document: &mut Document,
     source_root: Option<&Path>,
     warnings: &mut Vec<String>,
 ) -> Result<String> {
     if let Some(root) = source_root {
         let path = root.join(&document.relative_path);
         match fs::read_to_string(&path) {
-            Ok(text) => return Ok(text),
+            Ok(text) => {
+                document.text.clear();
+                return Ok(text);
+            }
             Err(error) if !document.text.is_empty() => warnings.push(format!(
                 "could not read {} ({error}); using text embedded in SCIP",
                 path.display()
@@ -469,10 +555,10 @@ fn read_source(
             document.relative_path
         );
     }
-    Ok(document.text.clone())
+    Ok(std::mem::take(&mut document.text))
 }
 
-fn collect_definitions(documents: &[Document], sources: &[String]) -> Definitions {
+fn collect_definitions<'a>(documents: &'a [Document], sources: &[String]) -> Definitions<'a> {
     let mut result = Definitions::new(documents.len());
     for (file, document) in documents.iter().enumerate() {
         let lines: Vec<&str> = sources[file].split('\n').collect();
@@ -502,314 +588,11 @@ fn collect_definitions(documents: &[Document], sources: &[String]) -> Definition
     result
 }
 
-fn collect_function_index(
-    repo: &str,
-    commit: &str,
-    index: &Index,
-    sources: &[String],
-) -> FunctionIndex {
-    let mut information = HashMap::<&str, &SymbolInformation>::new();
-    for symbol in index
-        .documents
-        .iter()
-        .flat_map(|document| document.symbols.iter())
-        .chain(index.external_symbols.iter())
-    {
-        information.entry(symbol.symbol.as_str()).or_insert(symbol);
-    }
-
-    let mut functions = BTreeMap::<String, FunctionRecord>::new();
-    for (file_id, document) in index.documents.iter().enumerate() {
-        let source = &sources[file_id];
-        let lines: Vec<&str> = source.split('\n').collect();
-        let encoding = document.position_encoding.enum_value_or_default();
-        for occurrence in &document.occurrences {
-            if occurrence.symbol.is_empty() || occurrence.symbol_roles & DEFINITION_ROLE == 0 {
-                continue;
-            }
-            let info = information.get(occurrence.symbol.as_str()).copied();
-            let Some(raw_definition) = occurrence_range(occurrence) else {
-                continue;
-            };
-            if raw_definition.start_line >= lines.len() || raw_definition.end_line >= lines.len() {
-                continue;
-            }
-            if !is_function_symbol(occurrence, document, info, &lines, raw_definition) {
-                continue;
-            }
-            let Some(raw_enclosing) = occurrence_enclosing_range(occurrence)
-                .filter(|range| range.start_line < lines.len() && range.end_line < lines.len())
-                .or_else(|| infer_function_range(&lines, raw_definition, &document.language))
-            else {
-                continue;
-            };
-            let definition_range = browser_range(raw_definition, &lines, encoding);
-            let enclosing_range = browser_range(raw_enclosing, &lines, encoding);
-            let snippet = source_lines(source, raw_enclosing);
-            let doc_key = stable_doc_key(repo, commit, &document.relative_path, &occurrence.symbol);
-            let signature = info
-                .and_then(|value| value.signature_documentation.as_ref())
-                .map(|value| value.text.trim())
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| lines[raw_definition.start_line].trim())
-                .to_owned();
-            let display_name = info
-                .map(|value| value.display_name.trim())
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| {
-                    let line = lines[raw_definition.start_line];
-                    let start = raw_definition.start_character.min(line.len());
-                    let end = raw_definition.end_character.min(line.len()).max(start);
-                    line.get(start..end).unwrap_or(&occurrence.symbol)
-                })
-                .to_owned();
-            let mut related_symbols = document
-                .occurrences
-                .iter()
-                .filter(|candidate| {
-                    !candidate.symbol.is_empty()
-                        && candidate.symbol != occurrence.symbol
-                        && occurrence_range(candidate)
-                            .is_some_and(|range| range_within(range, raw_enclosing))
-                })
-                .map(|candidate| candidate.symbol.clone())
-                .collect::<Vec<_>>();
-            if let Some(info) = info {
-                related_symbols.extend(
-                    info.relationships
-                        .iter()
-                        .map(|relationship| relationship.symbol.clone()),
-                );
-            }
-            related_symbols.sort();
-            related_symbols.dedup();
-            functions
-                .entry(doc_key.clone())
-                .or_insert_with(|| FunctionRecord {
-                    doc_key,
-                    file_id,
-                    file: document.relative_path.clone(),
-                    language: document.language.clone(),
-                    scip_symbol: occurrence.symbol.clone(),
-                    kind: info
-                        .map(|value| format!("{:?}", value.kind.enum_value_or_default()))
-                        .unwrap_or_else(|| "Function".to_owned()),
-                    display_name,
-                    signature,
-                    definition_range,
-                    enclosing_range,
-                    existing_documentation: info
-                        .map(|value| value.documentation.clone())
-                        .unwrap_or_default(),
-                    related_symbols,
-                    diagnostics: occurrence
-                        .diagnostics
-                        .iter()
-                        .map(|diagnostic| diagnostic.message.clone())
-                        .collect(),
-                    source_hash: source_hash(&snippet),
-                });
-        }
-    }
-
-    FunctionIndex {
-        version: FUNCTION_INDEX_VERSION,
-        repo: repo.to_owned(),
-        commit: commit.to_owned(),
-        functions: functions.into_values().collect(),
-    }
-}
-
-fn is_function_symbol(
-    occurrence: &Occurrence,
-    document: &Document,
-    info: Option<&SymbolInformation>,
-    lines: &[&str],
-    definition: Range,
-) -> bool {
-    let kind = info.map(|value| value.kind.enum_value_or_default());
-    matches!(
-        kind,
-        Some(
-            symbol_information::Kind::Function
-                | symbol_information::Kind::Method
-                | symbol_information::Kind::Constructor
-                | symbol_information::Kind::Getter
-                | symbol_information::Kind::Setter
-                | symbol_information::Kind::AbstractMethod
-        )
-    ) || document.occurrences.iter().any(|candidate| {
-        candidate.syntax_kind.enum_value_or_default() == SyntaxKind::IdentifierFunctionDefinition
-            && occurrence_range(candidate) == occurrence_range(occurrence)
-    }) || (kind == Some(symbol_information::Kind::UnspecifiedKind) || kind.is_none())
-        && (occurrence.symbol.ends_with(").")
-            || looks_like_function_definition(occurrence, lines, definition))
-}
-
-fn infer_function_range(lines: &[&str], definition: Range, language: &str) -> Option<Range> {
-    let start = definition.start_line;
-    if language.eq_ignore_ascii_case("python") {
-        let base_indent = lines
-            .get(start)?
-            .chars()
-            .take_while(|character| character.is_whitespace())
-            .count();
-        for (line, text) in lines
-            .iter()
-            .enumerate()
-            .take(lines.len().min(start + 2000))
-            .skip(start + 1)
-        {
-            if text.trim().is_empty() || text.trim_start().starts_with('#') {
-                continue;
-            }
-            let indent = text
-                .chars()
-                .take_while(|character| character.is_whitespace())
-                .count();
-            if indent <= base_indent {
-                return Some(Range {
-                    start_line: start,
-                    start_character: 0,
-                    end_line: line.saturating_sub(1),
-                    end_character: lines[line.saturating_sub(1)].len(),
-                });
-            }
-        }
-        return None;
-    }
-
-    let mut opened = false;
-    let mut depth = 0isize;
-    let mut block_comment = false;
-    let mut quote = None;
-    let mut escaped = false;
-    for (line, text) in lines
-        .iter()
-        .enumerate()
-        .take(lines.len().min(start + 2000))
-        .skip(start)
-    {
-        let characters = text.as_bytes();
-        let mut index = 0usize;
-        while index < characters.len() {
-            let character = characters[index] as char;
-            let next = characters.get(index + 1).copied().map(char::from);
-            if block_comment {
-                if character == '*' && next == Some('/') {
-                    block_comment = false;
-                    index += 2;
-                    continue;
-                }
-                index += 1;
-                continue;
-            }
-            if let Some(delimiter) = quote {
-                if escaped {
-                    escaped = false;
-                } else if character == '\\' {
-                    escaped = true;
-                } else if character == delimiter {
-                    quote = None;
-                }
-                index += 1;
-                continue;
-            }
-            if character == '/' && next == Some('/') {
-                break;
-            }
-            if character == '/' && next == Some('*') {
-                block_comment = true;
-                index += 2;
-                continue;
-            }
-            if character == '\'' || character == '"' {
-                quote = Some(character);
-                index += 1;
-                continue;
-            }
-            match character {
-                '{' => {
-                    opened = true;
-                    depth += 1;
-                }
-                '}' if opened => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return Some(Range {
-                            start_line: start,
-                            start_character: 0,
-                            end_line: line,
-                            end_character: text.len(),
-                        });
-                    }
-                }
-                ';' if !opened && line == start => return None,
-                _ => {}
-            }
-            index += 1;
-        }
-    }
-    None
-}
-
-fn looks_like_function_definition(
-    occurrence: &Occurrence,
-    lines: &[&str],
-    definition: Range,
-) -> bool {
-    if matches!(
-        occurrence.syntax_kind.enum_value_or_default(),
-        SyntaxKind::IdentifierMacro | SyntaxKind::IdentifierMacroDefinition
-    ) {
-        return false;
-    }
-    let Some(enclosing) = occurrence_enclosing_range(occurrence) else {
-        return false;
-    };
-    if enclosing.end_line < definition.end_line
-        || (enclosing.start_line, enclosing.start_character)
-            > (definition.start_line, definition.start_character)
-    {
-        return false;
-    }
-    let line = lines.get(definition.end_line).copied().unwrap_or("");
-    let mut end = definition.end_character.min(line.len());
-    while end > 0 && !line.is_char_boundary(end) {
-        end -= 1;
-    }
-    line[end..].trim_start().starts_with('(')
-}
-
-fn browser_range(range: Range, lines: &[&str], encoding: PositionEncoding) -> [usize; 4] {
-    [
-        range.start_line,
-        utf16_column(lines[range.start_line], range.start_character, encoding),
-        range.end_line,
-        utf16_column(lines[range.end_line], range.end_character, encoding),
-    ]
-}
-
-fn range_within(inner: Range, outer: Range) -> bool {
-    (inner.start_line, inner.start_character) >= (outer.start_line, outer.start_character)
-        && (inner.end_line, inner.end_character) <= (outer.end_line, outer.end_character)
-}
-
-fn source_lines(source: &str, range: Range) -> String {
-    let lines: Vec<&str> = source.split('\n').collect();
-    if lines.is_empty() || range.start_line >= lines.len() {
-        return String::new();
-    }
-    let end = range.end_line.min(lines.len() - 1).max(range.start_line);
-    lines[range.start_line..=end].join("\n")
-}
-
 fn make_file_data<'a>(
     file_id: usize,
     document: &'a Document,
     source: &'a str,
-    definitions: &Definitions,
-    function_index: &FunctionIndex,
+    definitions: &Definitions<'_>,
 ) -> FileData<'a> {
     let lines: Vec<&str> = source.split('\n').collect();
     let encoding = document.position_encoding.enum_value_or_default();
@@ -855,20 +638,35 @@ fn make_file_data<'a>(
         ]);
     }
     let occurrences = consolidate_render_occurrences(occurrences);
+    let docs = symbol_documentation(&document.symbols);
 
     FileData {
         path: &document.relative_path,
         language: &document.language,
         text: source,
         symbols,
+        docs,
         occurrences,
-        function_doc_keys: function_index
-            .functions
-            .iter()
-            .filter(|function| function.file_id == file_id)
-            .map(|function| (function.scip_symbol.clone(), function.doc_key.clone()))
-            .collect(),
     }
+}
+
+fn symbol_documentation(symbols: &[SymbolInformation]) -> BTreeMap<&str, String> {
+    symbols
+        .iter()
+        .filter_map(|information| {
+            if information.symbol.is_empty() {
+                return None;
+            }
+            let markdown = information
+                .documentation
+                .iter()
+                .map(|section| section.trim())
+                .filter(|section| !section.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            (!markdown.is_empty()).then_some((information.symbol.as_str(), markdown))
+        })
+        .collect()
 }
 
 fn consolidate_render_occurrences(occurrences: Vec<[i64; 10]>) -> Vec<[i64; 10]> {
@@ -918,43 +716,6 @@ fn occurrence_range(value: &Occurrence) -> Option<Range> {
         _ => {}
     }
     match value.range.as_slice() {
-        [line, start, end] => Some(Range {
-            start_line: usize::try_from(*line).ok()?,
-            start_character: usize::try_from(*start).ok()?,
-            end_line: usize::try_from(*line).ok()?,
-            end_character: usize::try_from(*end).ok()?,
-        }),
-        [start_line, start, end_line, end] => Some(Range {
-            start_line: usize::try_from(*start_line).ok()?,
-            start_character: usize::try_from(*start).ok()?,
-            end_line: usize::try_from(*end_line).ok()?,
-            end_character: usize::try_from(*end).ok()?,
-        }),
-        _ => None,
-    }
-}
-
-fn occurrence_enclosing_range(value: &Occurrence) -> Option<Range> {
-    match &value.typed_enclosing_range {
-        Some(occurrence::Typed_enclosing_range::SingleLineEnclosingRange(value)) => {
-            return Some(Range {
-                start_line: usize::try_from(value.line).ok()?,
-                start_character: usize::try_from(value.start_character).ok()?,
-                end_line: usize::try_from(value.line).ok()?,
-                end_character: usize::try_from(value.end_character).ok()?,
-            });
-        }
-        Some(occurrence::Typed_enclosing_range::MultiLineEnclosingRange(value)) => {
-            return Some(Range {
-                start_line: usize::try_from(value.start_line).ok()?,
-                start_character: usize::try_from(value.start_character).ok()?,
-                end_line: usize::try_from(value.end_line).ok()?,
-                end_character: usize::try_from(value.end_character).ok()?,
-            });
-        }
-        _ => {}
-    }
-    match value.enclosing_range.as_slice() {
         [line, start, end] => Some(Range {
             start_line: usize::try_from(*line).ok()?,
             start_character: usize::try_from(*start).ok()?,
@@ -1053,7 +814,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_keeps_the_most_recently_generated_revision_first() {
+    fn catalog_keeps_only_the_most_recently_generated_revision() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("generated")).unwrap();
 
@@ -1093,7 +854,53 @@ mod tests {
                 .unwrap();
         assert_eq!(catalog.projects[0].commits[0].commit, "aaa");
         assert_eq!(catalog.projects[0].commits[0].file_count, 5);
-        assert_eq!(catalog.projects[0].commits[1].commit, "bbb");
+        assert_eq!(catalog.projects[0].commits.len(), 1);
+    }
+
+    #[test]
+    fn removes_old_commit_directories() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("old")).unwrap();
+        fs::create_dir_all(root.path().join("current")).unwrap();
+
+        prune_old_commits(root.path(), "current").unwrap();
+
+        assert!(!root.path().join("old").exists());
+        assert!(root.path().join("current").is_dir());
+    }
+
+    #[test]
+    fn initializes_unbuilt_repositories_without_removing_existing_revisions() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("generated")).unwrap();
+        update_catalog(
+            root.path(),
+            "example-com-built",
+            "https://example.com/built.git",
+            "abc",
+            "Built",
+            1,
+            2,
+        )
+        .unwrap();
+
+        initialize_site(
+            root.path(),
+            &[
+                "https://example.com/built.git".to_owned(),
+                "https://example.com/pending.git".to_owned(),
+            ],
+            true,
+        )
+        .unwrap();
+
+        let catalog: Catalog =
+            serde_json::from_slice(&fs::read(root.path().join("generated/catalog.json")).unwrap())
+                .unwrap();
+        assert_eq!(catalog.projects.len(), 2);
+        assert_eq!(catalog.projects[0].commits[0].commit, "abc");
+        assert!(catalog.projects[1].commits.is_empty());
+        assert!(root.path().join("index.html").is_file());
     }
 
     #[test]
@@ -1136,34 +943,21 @@ mod tests {
     }
 
     #[test]
-    fn indexes_function_bodies_when_scip_omits_enclosing_ranges() {
-        let source = "static int add(int a, int b)\n{\n    return a + b;\n}\n";
-        let document = Document {
-            relative_path: "src/add.c".to_owned(),
-            language: "C".to_owned(),
-            text: source.to_owned(),
-            occurrences: vec![Occurrence {
-                range: vec![0, 11, 14],
-                symbol: "cxx . . $ add(abc123).".to_owned(),
-                symbol_roles: DEFINITION_ROLE,
-                ..Occurrence::default()
-            }],
-            ..Document::default()
-        };
-        let index = Index {
-            documents: vec![document],
-            ..Index::default()
-        };
+    fn preserves_scip_symbol_documentation_for_the_browser() {
+        let symbols = vec![SymbolInformation {
+            symbol: "cxx . . example().".to_owned(),
+            documentation: vec![
+                "First paragraph.".to_owned(),
+                "Second paragraph.".to_owned(),
+            ],
+            ..SymbolInformation::default()
+        }];
 
-        let functions =
-            collect_function_index("example-repo", "abc123", &index, &[source.to_owned()]);
+        let docs = symbol_documentation(&symbols);
 
-        assert_eq!(functions.functions.len(), 1);
-        assert_eq!(functions.functions[0].display_name, "add");
-        assert_eq!(functions.functions[0].enclosing_range, [0, 0, 3, 1]);
         assert_eq!(
-            functions.functions[0].signature,
-            "static int add(int a, int b)"
+            docs.get("cxx . . example().").map(String::as_str),
+            Some("First paragraph.\n\nSecond paragraph.")
         );
     }
 }

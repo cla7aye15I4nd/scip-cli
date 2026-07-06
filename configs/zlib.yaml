@@ -1,0 +1,9 @@
+extends: bases/cmake-ninja.yaml
+name: zlib
+description: zlib compression library used by Chromium
+repository:
+  url: https://github.com/madler/zlib.git
+  directory: zlib
+  depth: 1
+variables:
+  cmake_args: -DCMAKE_BUILD_TYPE=Release
