@@ -60,20 +60,7 @@ jobs:
       - name: Restore the previous catalog
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          run_id=$(gh run list \
-            --workflow code-browser.yml \
-            --branch main \
-            --status success \
-            --limit 1 \
-            --json databaseId \
-            --jq '.[0].databaseId // empty')
-          if [[ -n "$run_id" ]]; then
-            mkdir -p previous-site/generated
-            if ! gh run download "$run_id" --name code-browser-catalog --dir previous-site/generated; then
-              gh run download "$run_id" --name code-browser-state --dir previous-site
-            fi
-          fi
+        run: .github/scripts/restore-state.sh previous-site catalog
 
       - name: Select projects
         id: plan
@@ -144,17 +131,7 @@ jobs:
       - name: Restore the previous production site
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          run_id=$(gh run list \
-            --workflow code-browser.yml \
-            --branch main \
-            --status success \
-            --limit 1 \
-            --json databaseId \
-            --jq '.[0].databaseId // empty')
-          if [[ -n "$run_id" ]]; then
-            gh run download "$run_id" --name code-browser-state --dir site
-          fi
+        run: .github/scripts/restore-state.sh site
 
       - name: Download project fragments
         if: needs.plan.outputs.count != '0'
