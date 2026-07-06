@@ -11,37 +11,36 @@ permissions:
   actions: read
   contents: read
 
-env:
-  SCIP_CLANG_VERSION: v0.4.0
-
 jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 300M
     steps:
       - uses: actions/checkout@v6
 
-      - name: Download converter
+      - name: Download build tools
         uses: actions/download-artifact@v4
         with:
-          name: scip-cli-bin
+          name: build-tools
           path: bin
 
       - name: Install system dependencies
         run: |
-          chmod 755 bin/scip-cli
+          chmod 755 bin/scip-cli bin/scip-clang
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
-            bear clang cmake curl libbrotli-dev libfreetype-dev libjpeg-dev \
+            bear ccache clang cmake curl libbrotli-dev libfreetype-dev libjpeg-dev \
             liblzma-dev libpcre2-dev libpng-dev libssl-dev libwebp-dev \
-            ninja-build pkg-config zlib1g-dev
+            ninja-build pkg-config tcl zlib1g-dev
 
-      - name: Download scip-clang
-        run: |
-          curl --fail --location --retry 3 \
-            --output "$RUNNER_TEMP/scip-clang" \
-            "https://github.com/sourcegraph/scip-clang/releases/download/${SCIP_CLANG_VERSION}/scip-clang-x86_64-linux"
-          chmod 755 "$RUNNER_TEMP/scip-clang"
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ccache-${{ fromJSON(inputs.project).name }}-${{ fromJSON(inputs.project).commit }}-${{ fromJSON(inputs.project).configHash }}
 
       - name: Build and index project
         env:

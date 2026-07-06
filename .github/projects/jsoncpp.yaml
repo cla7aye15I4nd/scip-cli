@@ -1,0 +1,7 @@
+name: jsoncpp
+repoUrl: https://github.com/open-source-parsers/jsoncpp.git
+build: |
+  exec .github/scripts/build-cmake-project.sh \
+    -DJSONCPP_WITH_TESTS=OFF \
+    -DJSONCPP_WITH_POST_BUILD_UNITTEST=OFF \
+    -DBUILD_SHARED_LIBS=OFF

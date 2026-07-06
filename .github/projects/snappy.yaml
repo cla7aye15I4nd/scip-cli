@@ -1,0 +1,6 @@
+name: snappy
+repoUrl: https://github.com/google/snappy.git
+build: |
+  exec .github/scripts/build-cmake-project.sh \
+    -DSNAPPY_BUILD_TESTS=OFF \
+    -DSNAPPY_BUILD_BENCHMARKS=OFF
