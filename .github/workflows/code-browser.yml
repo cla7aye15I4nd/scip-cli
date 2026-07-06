@@ -14,6 +14,8 @@ on:
     paths:
       - ".github/**"
       - "assets/**"
+      - "worker/**"
+      - "wrangler.jsonc"
       - "src/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -22,6 +24,8 @@ on:
     paths:
       - ".github/**"
       - "assets/**"
+      - "worker/**"
+      - "wrangler.jsonc"
       - "src/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -38,6 +42,7 @@ permissions:
 env:
   CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
   CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  PAGES_PROJECT: scip-cli
   R2_BUCKET: scip-cli-data
 
 jobs:
@@ -48,6 +53,9 @@ jobs:
       count: ${{ steps.plan.outputs.count }}
     steps:
       - uses: actions/checkout@v6
+
+      - name: Test same-origin R2 route
+        run: node --test worker/r2-data.test.mjs
 
       - name: Require Cloudflare deployment credentials
         if: github.event_name != 'pull_request'
@@ -271,7 +279,7 @@ jobs:
 
           while IFS= read -r manifest; do
             commit_dir=${manifest%/manifest.json}
-            pack_url="${commit_dir#site/}/data.pack"
+            pack_url="/data/${commit_dir#site/}/data.pack"
             jq --arg pack_url "$pack_url" '.packUrl = $pack_url' "$manifest" > "$manifest.tmp"
             mv "$manifest.tmp" "$manifest"
           done < <(find site/generated -mindepth 3 -maxdepth 3 -name manifest.json -type f | sort)
@@ -299,7 +307,7 @@ jobs:
           while IFS= read -r manifest; do
             pack_url=$(jq -r .packUrl "$manifest")
             expected="${manifest%/manifest.json}/data.pack"
-            test "$pack_url" = "${expected#site/}"
+            test "$pack_url" = "/data/${expected#site/}"
           done < <(find site/generated -mindepth 3 -maxdepth 3 -name manifest.json -type f | sort)
           du -sh site
           echo "Validated $expected_projects single-version project manifests"
@@ -315,9 +323,11 @@ jobs:
           slug=${commit_dir%/*}
           slug=${slug##*/}
           source_path=$(jq -r '.files[0].path' "$manifest")
+          mkdir -p site/data
+          ln -s ../generated site/data/generated
           python3 -m http.server 8080 --directory site > "$RUNNER_TEMP/http.log" 2>&1 &
           server_pid=$!
-          trap 'kill "$server_pid"' EXIT
+          trap 'kill "$server_pid"; rm -f site/data/generated; rmdir site/data' EXIT
           timeout --signal=TERM 45s google-chrome --headless --no-sandbox --disable-gpu \
             --virtual-time-budget=5000 --dump-dom \
             "http://127.0.0.1:8080/#/$slug/$commit/$source_path?line=0" \
@@ -336,43 +346,41 @@ jobs:
         if: github.event_name != 'pull_request'
         run: npm install --global wrangler@4.107.0
 
-      - name: Deploy site to R2
+      - name: Publish immutable project packs to R2
         if: github.event_name != 'pull_request'
         run: |
           uploaded=0
-          upload_file() {
-            file=$1
+          while IFS= read -r file; do
             key=${file#site/}
-            case "$file" in
-              *.html) content_type='text/html; charset=utf-8' ;;
-              *.js) content_type='text/javascript; charset=utf-8' ;;
-              *.css) content_type='text/css; charset=utf-8' ;;
-              *.json) content_type='application/json' ;;
-              *.pack) content_type='application/octet-stream' ;;
-              *) content_type='application/octet-stream' ;;
-            esac
-            if [[ "$file" == *.pack ]]; then
-              cache_control='public, max-age=31536000, immutable'
-            else
-              cache_control='no-cache'
-            fi
             echo "Uploading $key to R2"
             wrangler r2 object put "$R2_BUCKET/$key" \
               --remote \
               --file "$file" \
-              --content-type "$content_type" \
-              --cache-control "$cache_control"
+              --content-type application/octet-stream \
+              --cache-control 'public, max-age=31536000, immutable'
             uploaded=$((uploaded + 1))
-          }
-
-          while IFS= read -r file; do upload_file "$file"; done \
-            < <(find site/generated -name data.pack -type f | sort)
-          while IFS= read -r file; do upload_file "$file"; done \
-            < <(find site -type f ! -path 'site/generated/catalog.json' ! -name data.pack | sort)
-          upload_file site/generated/catalog.json
-          echo "Deployed $uploaded site objects to R2"
-
+          done < <(find site/generated -mindepth 3 -maxdepth 3 -name data.pack -type f | sort)
           find site -name data.pack -type f -delete
+          echo "Published $uploaded immutable project packs to R2"
+
+      - name: Deploy same-origin R2 route
+        if: github.event_name != 'pull_request'
+        run: wrangler deploy --config wrangler.jsonc
+
+      - name: Validate Pages payload
+        if: github.event_name != 'pull_request'
+        run: |
+          test "$(find site -name data.pack -type f | wc -l)" -eq 0
+          test "$(find site/generated -mindepth 3 -maxdepth 3 -name manifest.json -type f | wc -l)" -eq "$(jq '.projects | length' site/generated/catalog.json)"
+          jq --exit-status --slurp --slurpfile catalog site/generated/catalog.json '
+            all(.[].packUrl; startswith("/data/generated/")) and
+            (length == ($catalog[0].projects | length))
+          ' site/generated/*/*/manifest.json > /dev/null
+          file_count=$(find site -type f | wc -l)
+          largest_file=$(find site -type f -printf '%s\n' | sort -nr | head -1)
+          test "$file_count" -le 20000
+          test "$largest_file" -le 26214400
+          echo "Validated Pages payload: $file_count files; largest is $largest_file bytes"
 
       - name: Keep production state
         if: github.event_name != 'pull_request'
@@ -389,3 +397,7 @@ jobs:
           name: code-browser-catalog
           path: site/generated/catalog.json
           retention-days: 14
+
+      - name: Deploy to Cloudflare Pages
+        if: github.event_name != 'pull_request'
+        run: wrangler pages deploy site --project-name="$PAGES_PROJECT" --branch=main --commit-dirty=true
