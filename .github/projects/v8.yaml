@@ -30,16 +30,16 @@ build: |
     v8_use_external_startup_data=false
     v8_enable_i18n_support=false
     treat_warnings_as_errors=false
-    use_remoteexec=false
-    cc_wrapper="ccache"'
+    use_remoteexec=false'
   autoninja -C "$BUILD_DIR" v8_generated_cc_files -j "$BUILD_JOBS"
 
   ruby -rjson -e '
       root = File.expand_path(ARGV.fetch(0)) + File::SEPARATOR
+      source_root = File.join(root, "src") + File::SEPARATOR
       seen = {}
       entries = JSON.parse(File.read(ARGV.fetch(1))).select do |entry|
         path = File.expand_path(entry.fetch("file"), entry.fetch("directory", root))
-        path.start_with?(root) && !seen[path] && (seen[path] = true)
+        path.start_with?(source_root) && !seen[path] && (seen[path] = true)
       end
       puts JSON.generate(entries)
     ' "$SOURCE_DIR" "$BUILD_DIR/compile_commands.json" > "$BUILD_DIR/compile_commands.filtered.json"
