@@ -29,7 +29,7 @@ permissions:
 env:
   CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
   CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-  PAGES_PROJECT: scip-cli-zlib
+  PAGES_PROJECT: scip-cli
   SCIP_CLANG_VERSION: v0.4.0
 
 jobs:
