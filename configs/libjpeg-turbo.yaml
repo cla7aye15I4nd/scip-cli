@@ -1,9 +1,0 @@
-extends: bases/cmake-ninja.yaml
-name: libjpeg-turbo
-description: SIMD JPEG codec used by Chromium and Skia
-repository:
-  url: https://github.com/libjpeg-turbo/libjpeg-turbo.git
-  directory: libjpeg-turbo
-  depth: 1
-variables:
-  cmake_args: -DCMAKE_BUILD_TYPE=Release

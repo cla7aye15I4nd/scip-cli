@@ -1,9 +1,0 @@
-extends: bases/cmake-ninja.yaml
-name: protobuf
-description: Protocol Buffers runtime used by Chromium components
-repository:
-  url: https://github.com/protocolbuffers/protobuf.git
-  directory: protobuf
-  depth: 1
-variables:
-  cmake_args: -DCMAKE_BUILD_TYPE=Release

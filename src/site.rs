@@ -27,55 +27,6 @@ pub struct BuildReport {
     pub warnings: Vec<String>,
 }
 
-/// Publish the application shell and register repositories before their indexes
-/// are built. This keeps configured repositories visible as "Not indexed" while
-/// a long-running initial build is in progress.
-pub fn initialize_site(web_root: &Path, repositories: &[String], prune: bool) -> Result<()> {
-    write_site_shell(web_root)?;
-    fs::create_dir_all(web_root.join("generated"))?;
-    let path = web_root.join("generated/catalog.json");
-    let mut catalog: Catalog = match fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .with_context(|| format!("failed to parse {}", path.display()))?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Catalog {
-            version: 1,
-            projects: Vec::new(),
-        },
-        Err(error) => {
-            return Err(error).with_context(|| format!("failed to read {}", path.display()));
-        }
-    };
-    catalog.version = 1;
-    if prune {
-        let configured = repositories
-            .iter()
-            .map(|url| slug_repo_url(url))
-            .collect::<Result<Vec<_>>>()?;
-        catalog
-            .projects
-            .retain(|project| configured.contains(&project.slug));
-    }
-    for repo_url in repositories {
-        let slug = slug_repo_url(repo_url)?;
-        if let Some(project) = catalog.projects.iter().find(|item| item.slug == slug) {
-            if project.repo_url != repo_url.as_str() {
-                bail!(
-                    "repository slug collision: {repo_url:?} and {:?} both become {slug:?}",
-                    project.repo_url
-                );
-            }
-            continue;
-        }
-        catalog.projects.push(CatalogProject {
-            slug,
-            repo_url: repo_url.clone(),
-            commits: Vec::new(),
-        });
-    }
-    catalog.projects.sort_by(|a, b| a.slug.cmp(&b.slug));
-    write_json_atomic(&path, &catalog)
-}
-
 fn write_site_shell(web_root: &Path) -> Result<()> {
     fs::create_dir_all(web_root.join("assets"))?;
     let legacy_catalog = web_root.join("generated/catalog.js");
@@ -973,41 +924,6 @@ mod tests {
         assert!(!generated.join("manifest.js").exists());
         assert!(!generated.join("files/0.js").exists());
         assert!(!web_root.join("generated/catalog.js").exists());
-    }
-
-    #[test]
-    fn initializes_unbuilt_repositories_without_removing_existing_revisions() {
-        let root = tempfile::tempdir().unwrap();
-        fs::create_dir_all(root.path().join("generated")).unwrap();
-        update_catalog(
-            root.path(),
-            "example-com-built",
-            "https://example.com/built.git",
-            "abc",
-            "Built",
-            1,
-            2,
-        )
-        .unwrap();
-
-        initialize_site(
-            root.path(),
-            &[
-                "https://example.com/built.git".to_owned(),
-                "https://example.com/pending.git".to_owned(),
-            ],
-            true,
-        )
-        .unwrap();
-
-        let catalog: Catalog =
-            serde_json::from_slice(&fs::read(root.path().join("generated/catalog.json")).unwrap())
-                .unwrap();
-        assert_eq!(catalog.projects.len(), 2);
-        assert_eq!(catalog.projects[0].commits[0].commit, "abc");
-        assert!(catalog.projects[1].commits.is_empty());
-        assert!(root.path().join("index.html").is_file());
-        assert!(!root.path().join("generated/catalog.js").exists());
     }
 
     #[test]

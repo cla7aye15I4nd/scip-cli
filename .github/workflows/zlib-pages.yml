@@ -6,8 +6,6 @@ on:
     paths:
       - ".github/workflows/zlib-pages.yml"
       - "assets/**"
-      - "configs/bases/cmake-ninja.yaml"
-      - "configs/zlib.yaml"
       - "src/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -16,8 +14,6 @@ on:
     paths:
       - ".github/workflows/zlib-pages.yml"
       - "assets/**"
-      - "configs/bases/cmake-ninja.yaml"
-      - "configs/zlib.yaml"
       - "src/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -34,6 +30,7 @@ env:
   CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
   CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
   PAGES_PROJECT: scip-cli-zlib
+  SCIP_CLANG_VERSION: v0.4.0
 
 jobs:
   build-and-deploy:
@@ -47,7 +44,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends ccache clang cmake curl ninja-build
+          sudo apt-get install --yes --no-install-recommends clang cmake curl ninja-build
 
       - name: Select Rust 1.88
         run: |
@@ -62,22 +59,36 @@ jobs:
 
       - name: Generate zlib SCIP index
         run: |
-          target/release/scip-cli generate zlib \
-            --output-dir "$RUNNER_TEMP/indexes" \
-            --work-dir "$RUNNER_TEMP/work" \
-            --tools-dir "$RUNNER_TEMP/tools" \
-            --jobs 4 \
-            --index-jobs 4
+          git clone --depth 1 https://github.com/madler/zlib.git "$RUNNER_TEMP/zlib"
+          cmake -S "$RUNNER_TEMP/zlib" -B "$RUNNER_TEMP/zlib-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++
+          cmake --build "$RUNNER_TEMP/zlib-build" --parallel 4
+          curl --fail --location --retry 3 \
+            --output "$RUNNER_TEMP/scip-clang" \
+            "https://github.com/sourcegraph/scip-clang/releases/download/${SCIP_CLANG_VERSION}/scip-clang-x86_64-linux"
+          chmod 755 "$RUNNER_TEMP/scip-clang"
+          (
+            cd "$RUNNER_TEMP/zlib"
+            "$RUNNER_TEMP/scip-clang" \
+              --compdb-path="$RUNNER_TEMP/zlib-build/compile_commands.json" \
+              --index-output-path="$RUNNER_TEMP/zlib.scip" \
+              --jobs=4 \
+              --no-progress-report
+          )
+          test "$(stat -c %s "$RUNNER_TEMP/zlib.scip")" -ge 1024
 
       - name: Generate static code browser
         id: site
         run: |
-          commit=$(git -C "$RUNNER_TEMP/work/zlib" rev-parse HEAD)
-          target/release/scip-cli html "$RUNNER_TEMP/indexes/zlib.scip" \
-            --source-root "$RUNNER_TEMP/work/zlib" \
+          commit=$(git -C "$RUNNER_TEMP/zlib" rev-parse HEAD)
+          target/release/scip-cli "$RUNNER_TEMP/zlib.scip" \
+            --source-root "$RUNNER_TEMP/zlib" \
             --repo-url https://github.com/madler/zlib.git \
             --commit "$commit" \
-            --web-root site \
+            --output-dir site \
             --title "zlib"
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
 
@@ -90,6 +101,17 @@ jobs:
           test "$largest_file" -le 26214400
           du -sh site
           echo "Validated $file_count files; largest file is $largest_file bytes"
+
+      - name: Smoke-test source rendering in Chrome
+        run: |
+          python3 -m http.server 8080 --directory site > "$RUNNER_TEMP/http.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          google-chrome --headless --no-sandbox --disable-gpu \
+            --virtual-time-budget=5000 --dump-dom \
+            "http://127.0.0.1:8080/#/github-com-madler-zlib/${{ steps.site.outputs.commit }}/adler32.c?line=0" \
+            > "$RUNNER_TEMP/source-dom.html"
+          grep --quiet "compute the Adler-32 checksum" "$RUNNER_TEMP/source-dom.html"
 
       - name: Keep a short-lived test artifact
         uses: actions/upload-artifact@v4

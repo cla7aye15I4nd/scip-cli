@@ -715,6 +715,5 @@
   window.addEventListener("resize", scheduleWindow, { passive: true });
   window.addEventListener("popstate", openRoute);
   window.addEventListener("hashchange", openRoute);
-  renderViewHistory();
   start();
 })();
