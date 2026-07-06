@@ -373,7 +373,7 @@
     els.stats.textContent = `${catalog.projects.length.toLocaleString()} projects`;
     els["position-status"].textContent = "Ln 1, Col 1";
     els["language-status"].textContent = "SCIP";
-    document.title = "Repositories · Code Browser";
+    document.title = "Repositories · SCIP-CLI";
   }
 
   function renderFileList(query = "") {
