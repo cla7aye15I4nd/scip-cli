@@ -1,5 +1,6 @@
 name: yaml-cpp
 repoUrl: https://github.com/jbeder/yaml-cpp.git
+ccacheMaxSize: 25M
 build: |
   exec .github/scripts/build-cmake-project.sh \
     -DYAML_CPP_BUILD_TESTS=OFF \

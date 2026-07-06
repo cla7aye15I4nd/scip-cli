@@ -1,5 +1,6 @@
 name: leveldb
 repoUrl: https://github.com/google/leveldb.git
+ccacheMaxSize: 25M
 build: |
   exec .github/scripts/build-cmake-project.sh \
     -DLEVELDB_BUILD_TESTS=OFF \

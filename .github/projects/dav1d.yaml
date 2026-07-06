@@ -1,5 +1,6 @@
 name: dav1d
 repoUrl: https://code.videolan.org/videolan/dav1d.git
+ccacheMaxSize: 50M
 build: |
   CC="ccache clang" CXX="ccache clang++" meson setup "$BUILD_DIR" "$SOURCE_DIR" \
     --buildtype=release \

@@ -1,4 +1,5 @@
 name: harfbuzz
 repoUrl: https://github.com/harfbuzz/harfbuzz.git
+ccacheMaxSize: 50M
 build: |
   exec .github/scripts/build-cmake-project.sh -DHB_BUILD_SUBSET=OFF

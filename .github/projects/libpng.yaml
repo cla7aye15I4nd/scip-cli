@@ -1,4 +1,5 @@
 name: libpng
 repoUrl: https://github.com/pnggroup/libpng.git
+ccacheMaxSize: 25M
 build: |
   exec .github/scripts/build-cmake-project.sh

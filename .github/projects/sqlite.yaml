@@ -1,5 +1,6 @@
 name: sqlite
 repoUrl: https://github.com/sqlite/sqlite.git
+ccacheMaxSize: 50M
 build: |
   cd "$SOURCE_DIR"
   CC="ccache clang" ./configure --disable-shared --disable-readline

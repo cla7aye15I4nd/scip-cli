@@ -1,5 +1,6 @@
 name: lz4
 repoUrl: https://github.com/lz4/lz4.git
+ccacheMaxSize: 25M
 build: |
   SOURCE_DIR="$SOURCE_DIR/build/cmake" exec .github/scripts/build-cmake-project.sh \
     -DLZ4_BUILD_CLI=OFF \

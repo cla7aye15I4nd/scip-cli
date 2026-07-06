@@ -1,5 +1,6 @@
 name: zstd
 repoUrl: https://github.com/facebook/zstd.git
+ccacheMaxSize: 50M
 build: |
   SOURCE_DIR="$SOURCE_DIR/build/cmake" exec .github/scripts/build-cmake-project.sh \
     -DZSTD_BUILD_PROGRAMS=OFF \

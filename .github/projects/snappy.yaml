@@ -1,5 +1,6 @@
 name: snappy
 repoUrl: https://github.com/google/snappy.git
+ccacheMaxSize: 25M
 build: |
   exec .github/scripts/build-cmake-project.sh \
     -DSNAPPY_BUILD_TESTS=OFF \

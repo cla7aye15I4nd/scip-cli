@@ -2,7 +2,7 @@ name: linux
 repoUrl: https://github.com/torvalds/linux.git
 timeoutMinutes: 180
 buildJobs: 4
-ccacheMaxSize: 2G
+ccacheMaxSize: 500M
 build: |
   make -C "$SOURCE_DIR" O="$BUILD_DIR" \
     LLVM=1 \

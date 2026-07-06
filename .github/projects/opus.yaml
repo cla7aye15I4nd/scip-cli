@@ -1,5 +1,6 @@
 name: opus
 repoUrl: https://github.com/xiph/opus.git
+ccacheMaxSize: 50M
 build: |
   exec .github/scripts/build-cmake-project.sh \
     -DOPUS_BUILD_TESTING=OFF \

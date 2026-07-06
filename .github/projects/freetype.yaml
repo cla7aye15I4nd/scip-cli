@@ -1,5 +1,6 @@
 name: freetype
 repoUrl: https://gitlab.freedesktop.org/freetype/freetype.git
+ccacheMaxSize: 50M
 build: |
   exec .github/scripts/build-cmake-project.sh \
     -DFT_DISABLE_BROTLI=ON \

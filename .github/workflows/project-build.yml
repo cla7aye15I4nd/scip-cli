@@ -69,6 +69,7 @@ jobs:
           export BUILD_DIR="$build_dir"
           export BUILD_JOBS
           BUILD_JOBS=$(jq -r '.buildJobs // 4' <<< "$PROJECT_JSON")
+          ccache --zero-stats
           build_command=$(ruby -ryaml -e 'puts YAML.safe_load_file(ARGV[0]).fetch("build")' ".github/projects/$project.yaml")
           bash -euo pipefail -c "$build_command"
 

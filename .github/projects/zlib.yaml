@@ -1,4 +1,5 @@
 name: zlib
 repoUrl: https://github.com/madler/zlib.git
+ccacheMaxSize: 25M
 build: |
   exec .github/scripts/build-cmake-project.sh

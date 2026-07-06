@@ -1,4 +1,5 @@
 name: double-conversion
 repoUrl: https://github.com/google/double-conversion.git
+ccacheMaxSize: 25M
 build: |
   exec .github/scripts/build-cmake-project.sh -DBUILD_SHARED_LIBS=OFF
