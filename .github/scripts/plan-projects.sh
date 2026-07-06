@@ -18,7 +18,9 @@ while IFS= read -r project; do
   if [[ "$build" == true ]]; then
     projects=$(jq --compact-output --argjson project "$project" '. + [$project]' <<< "$projects")
   fi
-done < <(jq --compact-output '.[]' .github/projects.json)
+done < <(find .github/projects -mindepth 2 -maxdepth 2 -name project.json -type f -print0 \
+  | sort -z \
+  | xargs -0 -n1 jq --compact-output '.')
 
 echo "projects=$projects" >> "$GITHUB_OUTPUT"
 echo "count=$(jq 'length' <<< "$projects")" >> "$GITHUB_OUTPUT"
