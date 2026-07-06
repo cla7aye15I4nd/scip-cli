@@ -45,7 +45,46 @@ jobs:
       - name: Build and index project
         env:
           PROJECT_JSON: ${{ inputs.project }}
-        run: .github/scripts/build-project.sh
+        run: |
+          project=$(jq -r .name <<< "$PROJECT_JSON")
+          repo_url=$(jq -r .repoUrl <<< "$PROJECT_JSON")
+          source_dir="$RUNNER_TEMP/source"
+          build_dir="$RUNNER_TEMP/build"
+          index_path="$RUNNER_TEMP/$project.scip"
+          mkdir -p "$build_dir"
+          clone_args=(--depth 1)
+          if [[ "$(jq -r '.cloneSubmodules // false' <<< "$PROJECT_JSON")" == true ]]; then
+            clone_args+=(--recurse-submodules --shallow-submodules)
+          fi
+          git clone "${clone_args[@]}" "$repo_url" "$source_dir"
+          actual_commit=$(git -C "$source_dir" rev-parse HEAD)
+          planned_commit=$(jq -r .commit <<< "$PROJECT_JSON")
+          if [[ "$actual_commit" != "$planned_commit" ]]; then
+            echo "Upstream HEAD changed from $planned_commit to $actual_commit; building the checked-out commit" >&2
+          fi
+          export SOURCE_DIR="$source_dir"
+          export BUILD_DIR="$build_dir"
+          export BUILD_JOBS=4
+          build_command=$(ruby -ryaml -e 'puts YAML.safe_load_file(ARGV[0]).fetch("build")' ".github/projects/$project.yaml")
+          bash -euo pipefail -c "$build_command"
+
+          (
+            cd "$source_dir"
+            "$GITHUB_WORKSPACE/bin/scip-clang" \
+              --compdb-path="$build_dir/compile_commands.json" \
+              --index-output-path="$index_path" \
+              --jobs=4 \
+              --no-progress-report
+          )
+          test "$(stat -c %s "$index_path")" -ge 1024
+
+          bin/scip-cli "$index_path" \
+            --source-root "$source_dir" \
+            --repo-url "$repo_url" \
+            --commit "$actual_commit" \
+            --output-dir fragment \
+            --title "$project"
+          ccache --show-stats
 
       - name: Upload project fragment
         uses: actions/upload-artifact@v4

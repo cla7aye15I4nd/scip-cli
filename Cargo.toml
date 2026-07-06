@@ -9,6 +9,7 @@ default-run = "scip-cli"
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
+flate2 = "1.1"
 protobuf = "=3.7.2"
 scip = "0.9.0"
 serde = { version = "1.0", features = ["derive"] }

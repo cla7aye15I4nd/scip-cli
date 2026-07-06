@@ -1,16 +1,19 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::io::{BufWriter, Write};
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use flate2::{Compression, GzBuilder};
 use protobuf::Message;
 use scip::types::{Document, Index, Occurrence, PositionEncoding, SymbolInformation, occurrence};
 use serde::Serialize;
 use url::Url;
 
 const DEFINITION_ROLE: i32 = 1;
-const RETAINED_COMMITS: usize = 2;
+const CATALOG_VERSION: u32 = 2;
+const RETAINED_COMMITS: usize = 1;
 
 pub struct BuildOptions {
     pub input: PathBuf,
@@ -108,6 +111,7 @@ struct Manifest<'a> {
     repo_url: &'a str,
     repo_slug: &'a str,
     commit: &'a str,
+    pack_url: String,
     files: Vec<ManifestFile<'a>>,
     file_count: usize,
     occurrence_count: usize,
@@ -142,6 +146,8 @@ struct ManifestFile<'a> {
     id: usize,
     path: &'a str,
     language: &'a str,
+    offset: u64,
+    length: u64,
 }
 
 #[derive(Serialize)]
@@ -199,30 +205,48 @@ pub fn build(options: BuildOptions) -> Result<BuildReport> {
             )
         })?;
     }
-    fs::create_dir_all(staging.join("files"))?;
+    fs::create_dir_all(&staging)?;
 
     let mut occurrence_count = 0;
+    let mut offset = 0_u64;
+    let mut files = Vec::with_capacity(index.documents.len());
+    let mut pack = BufWriter::new(
+        fs::File::create(staging.join("data.pack")).context("failed to create data pack")?,
+    );
     for (file_id, document) in index.documents.iter().enumerate() {
         let data = make_file_data(file_id, document, &sources[file_id], &definitions);
         occurrence_count += data.occurrences.len();
-        write_json(&staging.join(format!("files/{file_id}.json")), &data)?;
+        let json = serde_json::to_vec(&data).context("failed to serialize source record")?;
+        let mut encoder = GzBuilder::new()
+            .mtime(0)
+            .write(Vec::new(), Compression::default());
+        encoder
+            .write_all(&json)
+            .context("failed to compress source record")?;
+        let compressed = encoder.finish().context("failed to finish source record")?;
+        let length = u64::try_from(compressed.len()).context("source record is too large")?;
+        pack.write_all(&compressed)
+            .context("failed to append source record to data pack")?;
+        files.push(ManifestFile {
+            id: file_id,
+            path: &document.relative_path,
+            language: &document.language,
+            offset,
+            length,
+        });
+        offset = offset
+            .checked_add(length)
+            .context("data pack exceeded supported size")?;
     }
+    pack.flush().context("failed to flush data pack")?;
 
     let manifest = Manifest {
         title: &options.title,
         repo_url: &options.repo_url,
         repo_slug: &repo_slug,
         commit: &options.commit,
-        files: index
-            .documents
-            .iter()
-            .enumerate()
-            .map(|(id, document)| ManifestFile {
-                id,
-                path: &document.relative_path,
-                language: &document.language,
-            })
-            .collect(),
+        pack_url: format!("generated/{repo_slug}/{}/data.pack", options.commit),
+        files,
         file_count: index.documents.len(),
         occurrence_count,
     };
@@ -432,14 +456,14 @@ fn update_catalog(
         Ok(bytes) => serde_json::from_slice(&bytes)
             .with_context(|| format!("failed to parse {}", path.display()))?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Catalog {
-            version: 1,
+            version: CATALOG_VERSION,
             projects: Vec::new(),
         },
         Err(error) => {
             return Err(error).with_context(|| format!("failed to read {}", path.display()));
         }
     };
-    catalog.version = 1;
+    catalog.version = CATALOG_VERSION;
     let project = match catalog.projects.iter_mut().find(|item| item.slug == slug) {
         Some(project) => {
             if project.repo_url != repo_url {
@@ -767,6 +791,8 @@ fn utf16_column(line: &str, column: usize, encoding: PositionEncoding) -> usize 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::read::GzDecoder;
+    use std::io::Read;
 
     #[test]
     fn converts_position_encodings_to_browser_columns() {
@@ -827,7 +853,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_keeps_the_two_most_recently_generated_revisions() {
+    fn catalog_keeps_only_the_current_revision() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("generated")).unwrap();
 
@@ -867,8 +893,8 @@ mod tests {
                 .unwrap();
         assert_eq!(catalog.projects[0].commits[0].commit, "aaa");
         assert_eq!(catalog.projects[0].commits[0].file_count, 5);
-        assert_eq!(catalog.projects[0].commits[1].commit, "bbb");
-        assert_eq!(catalog.projects[0].commits.len(), 2);
+        assert_eq!(catalog.projects[0].commits.len(), 1);
+        assert_eq!(catalog.version, CATALOG_VERSION);
     }
 
     #[test]
@@ -933,10 +959,23 @@ mod tests {
 
         let generated = web_root.join("generated/example-com-repo/abc123");
         assert!(generated.join("manifest.json").is_file());
-        assert!(generated.join("files/0.json").is_file());
+        assert!(generated.join("data.pack").is_file());
         assert!(!generated.join("manifest.js").exists());
-        assert!(!generated.join("files/0.js").exists());
+        assert!(!generated.join("files").exists());
         assert!(!web_root.join("generated/catalog.js").exists());
+
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(generated.join("manifest.json")).unwrap()).unwrap();
+        let record = &manifest["files"][0];
+        let offset = record["offset"].as_u64().unwrap() as usize;
+        let length = record["length"].as_u64().unwrap() as usize;
+        let pack = fs::read(generated.join("data.pack")).unwrap();
+        let mut decoder = GzDecoder::new(&pack[offset..offset + length]);
+        let mut decoded = String::new();
+        decoder.read_to_string(&mut decoded).unwrap();
+        let data: serde_json::Value = serde_json::from_str(&decoded).unwrap();
+        assert_eq!(data["path"], "src/main.c");
+        assert_eq!(data["text"], "int main(void) { return 0; }\n");
 
         build(BuildOptions {
             input,
@@ -949,13 +988,13 @@ mod tests {
         .unwrap();
 
         let project_root = web_root.join("generated/example-com-repo");
-        assert!(project_root.join("abc123/manifest.json").is_file());
+        assert!(!project_root.join("abc123").exists());
         assert!(project_root.join("def456/manifest.json").is_file());
         let catalog: Catalog =
             serde_json::from_slice(&fs::read(web_root.join("generated/catalog.json")).unwrap())
                 .unwrap();
         assert_eq!(catalog.projects[0].commits[0].commit, "def456");
-        assert_eq!(catalog.projects[0].commits[1].commit, "abc123");
+        assert_eq!(catalog.projects[0].commits.len(), 1);
     }
 
     #[test]

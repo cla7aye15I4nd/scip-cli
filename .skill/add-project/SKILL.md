@@ -62,10 +62,10 @@ Publish a focused draft PR. Inspect the named matrix job for the new project. Fi
 
 - project build and SCIP generation
 - project fragment upload
-- final site assembly
+- final single-version pack assembly
 - Cloudflare file-count and file-size checks
-- Chrome source-render smoke test
+- Chrome source-render smoke test through the pack reader
 
-After merging, let the main workflow produce `code-browser-state`. Confirm the production catalog contains the project and source text renders before declaring completion.
+After merging, let the main workflow publish the immutable project pack to R2 and produce the lightweight `code-browser-state`. Confirm the production catalog contains only the current commit and source text renders before declaring completion.
 
 The planner skips any upstream commit already present in the production catalog. Use the manual `force_rebuild` workflow input only when converter or build-definition changes must regenerate an unchanged upstream commit.
