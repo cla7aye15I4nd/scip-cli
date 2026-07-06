@@ -1,0 +1,7 @@
+name: nghttp2
+repoUrl: https://github.com/nghttp2/nghttp2.git
+build: |
+  exec .github/scripts/build-cmake-project.sh \
+    -DENABLE_LIB_ONLY=ON \
+    -DENABLE_STATIC_LIB=ON \
+    -DENABLE_SHARED_LIB=OFF

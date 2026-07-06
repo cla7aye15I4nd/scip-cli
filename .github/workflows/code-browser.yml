@@ -60,20 +60,7 @@ jobs:
       - name: Restore the previous catalog
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          run_id=$(gh run list \
-            --workflow code-browser.yml \
-            --branch main \
-            --status success \
-            --limit 1 \
-            --json databaseId \
-            --jq '.[0].databaseId // empty')
-          if [[ -n "$run_id" ]]; then
-            mkdir -p previous-site/generated
-            if ! gh run download "$run_id" --name code-browser-catalog --dir previous-site/generated; then
-              gh run download "$run_id" --name code-browser-state --dir previous-site
-            fi
-          fi
+        run: .github/scripts/restore-state.sh previous-site catalog
 
       - name: Select projects
         id: plan
@@ -144,17 +131,7 @@ jobs:
       - name: Restore the previous production site
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          run_id=$(gh run list \
-            --workflow code-browser.yml \
-            --branch main \
-            --status success \
-            --limit 1 \
-            --json databaseId \
-            --jq '.[0].databaseId // empty')
-          if [[ -n "$run_id" ]]; then
-            gh run download "$run_id" --name code-browser-state --dir site
-          fi
+        run: .github/scripts/restore-state.sh site
 
       - name: Download project fragments
         if: needs.plan.outputs.count != '0'
@@ -185,7 +162,7 @@ jobs:
           python3 -m http.server 8080 --directory site > "$RUNNER_TEMP/http.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid"' EXIT
-          google-chrome --headless --no-sandbox --disable-gpu \
+          timeout --signal=TERM 45s google-chrome --headless --no-sandbox --disable-gpu \
             --virtual-time-budget=5000 --dump-dom \
             "http://127.0.0.1:8080/#/github-com-madler-zlib/$commit/adler32.c?line=0" \
             > "$RUNNER_TEMP/source-dom.html"

@@ -1,0 +1,6 @@
+name: lz4
+repoUrl: https://github.com/lz4/lz4.git
+build: |
+  SOURCE_DIR="$SOURCE_DIR/build/cmake" exec .github/scripts/build-cmake-project.sh \
+    -DLZ4_BUILD_CLI=OFF \
+    -DLZ4_BUILD_LEGACY_LZ4C=OFF

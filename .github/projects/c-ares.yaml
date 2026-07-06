@@ -1,0 +1,8 @@
+name: c-ares
+repoUrl: https://github.com/c-ares/c-ares.git
+build: |
+  exec .github/scripts/build-cmake-project.sh \
+    -DCARES_BUILD_TESTS=OFF \
+    -DCARES_BUILD_TOOLS=OFF \
+    -DCARES_SHARED=OFF \
+    -DCARES_STATIC=ON

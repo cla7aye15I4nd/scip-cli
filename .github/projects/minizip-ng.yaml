@@ -1,0 +1,8 @@
+name: minizip-ng
+repoUrl: https://github.com/zlib-ng/minizip-ng.git
+build: |
+  exec .github/scripts/build-cmake-project.sh \
+    -DMZ_BUILD_TESTS=OFF \
+    -DMZ_BUILD_UNIT_TESTS=OFF \
+    -DMZ_BUILD_FUZZ_TESTS=OFF \
+    -DMZ_BUILD_TOOLS=OFF

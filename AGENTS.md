@@ -13,7 +13,7 @@
 - `.github/workflows/project-build.yml`: reusable workflow for one project.
 - `.github/scripts/`: shared CI mechanics; never add project-name `case` statements here.
 
-The planner compares every upstream HEAD with the previous production catalog and does not spawn a build when that commit is already indexed. The assembler restores the previous production artifact, merges project fragments, and retains at most the latest two commits per repository. Production state is retained for 14 days and refreshed weekly.
+The planner compares every upstream HEAD with the previous catalog and does not spawn a build when that commit is already indexed. Pull requests prefer their own last successful preview state, allowing projects to be added in verified batches without rebuilding earlier batches. The assembler merges project fragments and retains at most the latest two commits per repository. Production state is retained for 14 days and refreshed weekly.
 
 ## Project definitions
 
@@ -28,7 +28,7 @@ build: |
 
 The build runs with `SOURCE_DIR`, `BUILD_DIR`, and `BUILD_JOBS` exported. It must leave `compile_commands.json` at `$BUILD_DIR/compile_commands.json`. Prefer the shared CMake helper. For configure/Make projects, use `bear`. Disable tests, examples, benchmarks, documentation, and optional tools unless they generate source required by the library.
 
-Choose small, independently buildable C or C++ repositories. Avoid projects requiring depot_tools, large dependency syncs, proprietary SDKs, or multi-hour builds. Use canonical upstream URLs and verify Chromium usage from Chromium's `README.chromium` when making that claim.
+Choose small, independently buildable C or C++ repositories with meaningful attack surface: parsers, codecs, decompressors, protocol implementations, database formats, or components that otherwise process untrusted input. Do not add pure computation helpers, formatting libraries, CPU detection, checksums, or similar utilities merely because they are common. Avoid projects requiring depot_tools, large dependency syncs, proprietary SDKs, or multi-hour builds. Use canonical upstream URLs and verify Chromium usage from Chromium's `README.chromium` when making that claim.
 
 ## Static-site constraints
 

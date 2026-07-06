@@ -1,0 +1,9 @@
+name: dav1d
+repoUrl: https://code.videolan.org/videolan/dav1d.git
+build: |
+  CC="ccache clang" CXX="ccache clang++" meson setup "$BUILD_DIR" "$SOURCE_DIR" \
+    --buildtype=release \
+    -Denable_tests=false \
+    -Denable_tools=false \
+    -Denable_examples=false
+  meson compile -C "$BUILD_DIR" -j "$BUILD_JOBS"

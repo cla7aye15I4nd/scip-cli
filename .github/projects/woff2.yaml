@@ -1,0 +1,5 @@
+name: woff2
+repoUrl: https://github.com/google/woff2.git
+cloneSubmodules: true
+build: |
+  exec .github/scripts/build-cmake-project.sh
