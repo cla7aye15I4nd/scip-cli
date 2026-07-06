@@ -1,0 +1,6 @@
+name: opus
+repoUrl: https://github.com/xiph/opus.git
+build: |
+  exec .github/scripts/build-cmake-project.sh \
+    -DOPUS_BUILD_TESTING=OFF \
+    -DOPUS_BUILD_PROGRAMS=OFF

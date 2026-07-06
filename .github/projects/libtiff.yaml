@@ -1,0 +1,8 @@
+name: libtiff
+repoUrl: https://gitlab.com/libtiff/libtiff.git
+build: |
+  exec .github/scripts/build-cmake-project.sh \
+    -Dtiff-tests=OFF \
+    -Dtiff-tools=OFF \
+    -Dtiff-contrib=OFF \
+    -Dtiff-docs=OFF
