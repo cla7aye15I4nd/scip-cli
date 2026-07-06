@@ -1,5 +1,6 @@
 name: nginx
 repoUrl: https://github.com/nginx/nginx.git
+ccacheMaxSize: 50M
 build: |
   cd "$SOURCE_DIR"
   ./auto/configure --with-cc="ccache clang" --with-cc-opt=-O2

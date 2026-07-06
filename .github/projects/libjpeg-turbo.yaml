@@ -1,4 +1,5 @@
 name: libjpeg-turbo
 repoUrl: https://github.com/libjpeg-turbo/libjpeg-turbo.git
+ccacheMaxSize: 50M
 build: |
   exec .github/scripts/build-cmake-project.sh -DWITH_TESTS=OFF

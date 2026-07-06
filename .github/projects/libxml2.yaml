@@ -1,5 +1,6 @@
 name: libxml2
 repoUrl: https://gitlab.gnome.org/GNOME/libxml2.git
+ccacheMaxSize: 50M
 build: |
   exec .github/scripts/build-cmake-project.sh \
     -DBUILD_SHARED_LIBS=OFF \

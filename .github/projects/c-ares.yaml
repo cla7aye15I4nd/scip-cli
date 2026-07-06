@@ -1,5 +1,6 @@
 name: c-ares
 repoUrl: https://github.com/c-ares/c-ares.git
+ccacheMaxSize: 50M
 build: |
   exec .github/scripts/build-cmake-project.sh \
     -DCARES_BUILD_TESTS=OFF \

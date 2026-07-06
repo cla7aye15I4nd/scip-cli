@@ -31,6 +31,8 @@ The build runs with `SOURCE_DIR`, `BUILD_DIR`, and `BUILD_JOBS` exported. It mus
 
 Choose small, independently buildable C or C++ repositories with meaningful attack surface: parsers, codecs, decompressors, protocol implementations, database formats, or components that otherwise process untrusted input. Do not add pure computation helpers, formatting libraries, CPU detection, checksums, or similar utilities merely because they are common. Avoid projects requiring depot_tools, large dependency syncs, proprietary SDKs, or multi-hour builds. Use canonical upstream URLs and verify Chromium usage from Chromium's `README.chromium` when making that claim.
 
+Every project must set `ccacheMaxSize` according to measured cache usage. Keep the normal single-generation budget near 2 GB and always below 8 GB so the repository stays comfortably inside GitHub Actions' 10 GB cache allowance while old and new commit keys overlap. Start small projects at 25 MB, medium projects at 50 MB, and give larger projects measured headroom instead of assuming they need multi-gigabyte caches. Reset ccache statistics before each build, but never clear restored cache contents, so job logs show useful per-run hit rates. GitHub evicts caches that go unused for seven days and removes least-recently-used entries when the repository limit is reached.
+
 ## Static-site constraints
 
 - Store each source file as an independently gzip-compressed JSON record inside one immutable pack per project commit. The manifest must carry exact byte offsets and lengths so the browser can issue one Range request per source file.

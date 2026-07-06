@@ -1,5 +1,6 @@
 name: jsoncpp
 repoUrl: https://github.com/open-source-parsers/jsoncpp.git
+ccacheMaxSize: 25M
 build: |
   exec .github/scripts/build-cmake-project.sh \
     -DJSONCPP_WITH_TESTS=OFF \

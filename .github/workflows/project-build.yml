@@ -32,9 +32,9 @@ jobs:
           chmod 755 bin/scip-cli bin/scip-clang
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
-            bear ccache clang cmake curl libbrotli-dev libfreetype-dev libjpeg-dev \
-            liblzma-dev libpcre2-dev libpng-dev libssl-dev libwebp-dev \
-            meson nasm ninja-build pkg-config tcl zlib1g-dev
+            bc bear bison ccache clang cmake curl flex libbrotli-dev libelf-dev \
+            libfreetype-dev libjpeg-dev liblzma-dev libpcre2-dev libpng-dev \
+            libssl-dev libwebp-dev lld llvm meson nasm ninja-build pkg-config tcl zlib1g-dev
 
       - name: Restore compiler cache
         uses: actions/cache@v4
@@ -69,6 +69,7 @@ jobs:
           export BUILD_DIR="$build_dir"
           export BUILD_JOBS
           BUILD_JOBS=$(jq -r '.buildJobs // 4' <<< "$PROJECT_JSON")
+          ccache --zero-stats
           build_command=$(ruby -ryaml -e 'puts YAML.safe_load_file(ARGV[0]).fetch("build")' ".github/projects/$project.yaml")
           bash -euo pipefail -c "$build_command"
 

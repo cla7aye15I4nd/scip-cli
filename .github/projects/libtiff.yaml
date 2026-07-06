@@ -1,5 +1,6 @@
 name: libtiff
 repoUrl: https://gitlab.com/libtiff/libtiff.git
+ccacheMaxSize: 50M
 build: |
   exec .github/scripts/build-cmake-project.sh \
     -Dtiff-tests=OFF \

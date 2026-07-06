@@ -2,7 +2,7 @@ name: v8
 repoUrl: https://chromium.googlesource.com/v8/v8.git
 timeoutMinutes: 180
 buildJobs: 4
-ccacheMaxSize: 2G
+ccacheMaxSize: 100M
 build: |
   depot_tools="$RUNNER_TEMP/depot_tools"
   git clone --depth 1 \

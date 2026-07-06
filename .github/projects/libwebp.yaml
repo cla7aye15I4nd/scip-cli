@@ -1,5 +1,6 @@
 name: libwebp
 repoUrl: https://github.com/webmproject/libwebp.git
+ccacheMaxSize: 50M
 build: |
   exec .github/scripts/build-cmake-project.sh \
     -DWEBP_BUILD_EXTRAS=OFF \

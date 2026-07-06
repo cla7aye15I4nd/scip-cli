@@ -1,5 +1,6 @@
 name: expat
 repoUrl: https://github.com/libexpat/libexpat.git
+ccacheMaxSize: 25M
 build: |
   SOURCE_DIR="$SOURCE_DIR/expat" exec .github/scripts/build-cmake-project.sh \
     -DEXPAT_BUILD_TESTS=OFF \

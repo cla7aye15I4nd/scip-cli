@@ -1,9 +1,12 @@
 name: libyuv
 repoUrl: https://chromium.googlesource.com/libyuv/libyuv
+ccacheMaxSize: 50M
 build: |
   cmake -S "$SOURCE_DIR" -B "$BUILD_DIR" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
     -DCMAKE_C_COMPILER=clang \
-    -DCMAKE_CXX_COMPILER=clang++
+    -DCMAKE_CXX_COMPILER=clang++ \
+    -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+    -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
   cmake --build "$BUILD_DIR" --parallel "$BUILD_JOBS" --target yuv

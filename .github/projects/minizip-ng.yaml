@@ -1,5 +1,6 @@
 name: minizip-ng
 repoUrl: https://github.com/zlib-ng/minizip-ng.git
+ccacheMaxSize: 25M
 build: |
   exec .github/scripts/build-cmake-project.sh \
     -DMZ_BUILD_TESTS=OFF \

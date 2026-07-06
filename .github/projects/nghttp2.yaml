@@ -1,5 +1,6 @@
 name: nghttp2
 repoUrl: https://github.com/nghttp2/nghttp2.git
+ccacheMaxSize: 25M
 build: |
   exec .github/scripts/build-cmake-project.sh \
     -DENABLE_LIB_ONLY=ON \
