@@ -559,7 +559,7 @@
     const response = await fetch(new URL(manifest.packUrl, appRoot), {
       headers: { Range: `bytes=${start}-${start + length - 1}` },
       cache: "force-cache",
-      credentials: "include"
+      credentials: "same-origin"
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     let compressed = await response.arrayBuffer();
