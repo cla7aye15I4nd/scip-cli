@@ -1,0 +1,8 @@
+name: libxml2
+repoUrl: https://gitlab.gnome.org/GNOME/libxml2.git
+build: |
+  exec .github/scripts/build-cmake-project.sh \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DLIBXML2_WITH_PYTHON=OFF \
+    -DLIBXML2_WITH_TESTS=OFF \
+    -DLIBXML2_WITH_LZMA=OFF

@@ -7,7 +7,11 @@ source_dir="$RUNNER_TEMP/source"
 build_dir="$RUNNER_TEMP/build"
 index_path="$RUNNER_TEMP/$project.scip"
 mkdir -p "$build_dir"
-git clone --depth 1 "$repo_url" "$source_dir"
+clone_args=(--depth 1)
+if [[ "$(jq -r '.cloneSubmodules // false' <<< "$PROJECT_JSON")" == true ]]; then
+  clone_args+=(--recurse-submodules --shallow-submodules)
+fi
+git clone "${clone_args[@]}" "$repo_url" "$source_dir"
 actual_commit=$(git -C "$source_dir" rev-parse HEAD)
 planned_commit=$(jq -r .commit <<< "$PROJECT_JSON")
 if [[ "$actual_commit" != "$planned_commit" ]]; then

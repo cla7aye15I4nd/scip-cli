@@ -10,6 +10,8 @@ Read `AGENTS.md` and the existing `.github/projects/*.yaml` files before editing
 ## 1. Qualify the project
 
 - Prefer a canonical, actively maintained upstream repository.
+- Require meaningful attack surface: untrusted file/data parsing, media or font decoding, decompression, network protocols, or persistent database formats.
+- Reject pure computation helpers, formatting/logging libraries, CPU detection, checksums, and similarly low-exposure utilities even when they are popular.
 - Keep the project small and independently buildable on `ubuntu-24.04` with Clang.
 - Reject projects that require depot_tools, a large dependency sync, proprietary SDKs, or a long monolithic build.
 - Verify claims about Chromium usage against Chromium's upstream `README.chromium` or DEPS data.

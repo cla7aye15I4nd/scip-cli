@@ -1,0 +1,7 @@
+name: leveldb
+repoUrl: https://github.com/google/leveldb.git
+build: |
+  exec .github/scripts/build-cmake-project.sh \
+    -DLEVELDB_BUILD_TESTS=OFF \
+    -DLEVELDB_BUILD_BENCHMARKS=OFF \
+    -DLEVELDB_INSTALL=OFF

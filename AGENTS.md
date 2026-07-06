@@ -28,7 +28,7 @@ build: |
 
 The build runs with `SOURCE_DIR`, `BUILD_DIR`, and `BUILD_JOBS` exported. It must leave `compile_commands.json` at `$BUILD_DIR/compile_commands.json`. Prefer the shared CMake helper. For configure/Make projects, use `bear`. Disable tests, examples, benchmarks, documentation, and optional tools unless they generate source required by the library.
 
-Choose small, independently buildable C or C++ repositories. Avoid projects requiring depot_tools, large dependency syncs, proprietary SDKs, or multi-hour builds. Use canonical upstream URLs and verify Chromium usage from Chromium's `README.chromium` when making that claim.
+Choose small, independently buildable C or C++ repositories with meaningful attack surface: parsers, codecs, decompressors, protocol implementations, database formats, or components that otherwise process untrusted input. Do not add pure computation helpers, formatting libraries, CPU detection, checksums, or similar utilities merely because they are common. Avoid projects requiring depot_tools, large dependency syncs, proprietary SDKs, or multi-hour builds. Use canonical upstream URLs and verify Chromium usage from Chromium's `README.chromium` when making that claim.
 
 ## Static-site constraints
 
