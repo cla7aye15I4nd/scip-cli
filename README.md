@@ -6,6 +6,22 @@ a SCIP index, and publish indexes to a shared code browser. Profiles are
 included for HarfBuzz, V8, libtiff, PHP, CPython, and FFmpeg. Every included
 profile has completed an end-to-end SCIP generation run.
 
+## zlib CI and Cloudflare Pages
+
+The `Build zlib code browser` GitHub Actions workflow is the minimal hosted-CI
+example. It builds zlib on a standard Ubuntu runner, generates its SCIP index,
+converts the index to a JSON-only static site, validates Cloudflare Pages' free
+plan limits, and keeps the result as a one-day Actions artifact.
+
+To enable production deployment, create a Cloudflare Pages API token and add
+these repository Actions secrets:
+
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_API_TOKEN`
+
+The workflow then creates or updates the `scip-cli-zlib` Direct Upload project.
+Without those secrets, build and validation still run and deployment is skipped.
+
 ## Build
 
 ```bash

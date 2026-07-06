@@ -1,0 +1,122 @@
+name: Build zlib code browser
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/zlib-pages.yml"
+      - "assets/**"
+      - "configs/bases/cmake-ninja.yaml"
+      - "configs/zlib.yaml"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/zlib-pages.yml"
+      - "assets/**"
+      - "configs/bases/cmake-ninja.yaml"
+      - "configs/zlib.yaml"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+concurrency:
+  group: zlib-pages-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  deployments: write
+
+env:
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  PAGES_PROJECT: scip-cli-zlib
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out scip-cli
+        uses: actions/checkout@v6
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ccache clang cmake curl ninja-build
+
+      - name: Select Rust 1.88
+        run: |
+          rustup toolchain install 1.88 --profile minimal
+          rustup override set 1.88
+
+      - name: Test scip-cli
+        run: cargo test --locked --workspace --all-targets
+
+      - name: Build scip-cli
+        run: cargo build --release --locked --bin scip-cli
+
+      - name: Generate zlib SCIP index
+        run: |
+          target/release/scip-cli generate zlib \
+            --output-dir "$RUNNER_TEMP/indexes" \
+            --work-dir "$RUNNER_TEMP/work" \
+            --tools-dir "$RUNNER_TEMP/tools" \
+            --jobs 4 \
+            --index-jobs 4
+
+      - name: Generate static code browser
+        id: site
+        run: |
+          commit=$(git -C "$RUNNER_TEMP/work/zlib" rev-parse HEAD)
+          target/release/scip-cli html "$RUNNER_TEMP/indexes/zlib.scip" \
+            --source-root "$RUNNER_TEMP/work/zlib" \
+            --repo-url https://github.com/madler/zlib.git \
+            --commit "$commit" \
+            --web-root site \
+            --title "zlib"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+      - name: Validate Cloudflare Pages limits
+        run: |
+          test -s site/generated/catalog.json
+          file_count=$(find site -type f | wc -l)
+          largest_file=$(find site -type f -printf '%s\n' | sort -nr | head -1)
+          test "$file_count" -le 20000
+          test "$largest_file" -le 26214400
+          du -sh site
+          echo "Validated $file_count files; largest file is $largest_file bytes"
+
+      - name: Keep a short-lived test artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zlib-code-browser-${{ steps.site.outputs.commit }}
+          path: site
+          retention-days: 1
+
+      - name: Create Cloudflare Pages project if needed
+        if: github.event_name == 'push' && env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != ''
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v3
+        with:
+          accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          apiToken: ${{ env.CLOUDFLARE_API_TOKEN }}
+          command: pages project create ${{ env.PAGES_PROJECT }} --production-branch main
+
+      - name: Deploy to Cloudflare Pages
+        if: github.event_name == 'push' && env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != ''
+        uses: cloudflare/wrangler-action@v3
+        with:
+          accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          apiToken: ${{ env.CLOUDFLARE_API_TOKEN }}
+          command: pages deploy site --project-name=${{ env.PAGES_PROJECT }} --branch=main
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Report skipped Cloudflare deployment
+        if: github.event_name == 'push' && (env.CLOUDFLARE_ACCOUNT_ID == '' || env.CLOUDFLARE_API_TOKEN == '')
+        run: |
+          echo "::warning::Cloudflare deployment skipped. Configure CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN repository secrets."
