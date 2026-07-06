@@ -6,14 +6,14 @@ to their definitions, including definitions in other files. Repeated runs add
 repositories or replace their currently published commit in the same `web/`
 application.
 
-The output has no server-side runtime or framework. It uses clean history
-routes, loads source files on demand, and virtualizes source lines so very large
-files do not create a very large DOM.
+The output has no server-side runtime or framework. It uses hash routes that do
+not require server-side rewrites, loads source files on demand, and virtualizes
+source lines so very large files do not create a very large DOM.
 
 The browser has two route types:
 
 - `/`: repository catalog;
-- `/<repo>/<commit>/<path>`: source reading and symbol navigation.
+- `/#/<repo>/<commit>/<path>`: source reading and symbol navigation.
 
 ## Build and run
 
@@ -82,17 +82,15 @@ web/
 ```
 
 The root page lists all generated repositories and their current commits. Project and file
-URLs use normal browser paths:
+URLs use static-host-compatible hash routes:
 
 ```text
-/github-com-harfbuzz-harfbuzz/8f08f1d/
-/github-com-harfbuzz-harfbuzz/8f08f1d/src/hb-buffer.cc?line=120
+/#/github-com-harfbuzz-harfbuzz/8f08f1d/
+/#/github-com-harfbuzz-harfbuzz/8f08f1d/src/hb-buffer.cc?line=120
 ```
 
-The host must fall back unknown paths to `index.html`. `_redirects` provides
-this rule on hosts that support the Netlify/Cloudflare Pages format, while
-`404.html` provides the common GitHub Pages fallback. Configure an equivalent
-rewrite for nginx, S3, or another host.
+No host-level fallback or rewrite is required. `_redirects` and `404.html` are
+still emitted for compatibility with hosts that support those conventions.
 
 ## Navigation behavior
 
