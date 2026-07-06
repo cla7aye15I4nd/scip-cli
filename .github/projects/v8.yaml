@@ -32,7 +32,7 @@ build: |
     treat_warnings_as_errors=false
     use_remoteexec=false
     cc_wrapper="ccache"'
-  autoninja -C "$BUILD_DIR" v8_monolith -j "$BUILD_JOBS"
+  autoninja -C "$BUILD_DIR" v8_generated_cc_files -j "$BUILD_JOBS"
 
   ruby -rjson -e '
       root = File.expand_path(ARGV.fetch(0)) + File::SEPARATOR
