@@ -1,0 +1,60 @@
+name: v8
+repoUrl: https://chromium.googlesource.com/v8/v8.git
+timeoutMinutes: 180
+buildJobs: 4
+ccacheMaxSize: 2G
+build: |
+  depot_tools="$RUNNER_TEMP/depot_tools"
+  git clone --depth 1 \
+    https://chromium.googlesource.com/chromium/tools/depot_tools.git \
+    "$depot_tools"
+  export PATH="$depot_tools:$PATH"
+  "$depot_tools/update_depot_tools"
+  export DEPOT_TOOLS_UPDATE=0
+
+  cd "$RUNNER_TEMP"
+  gclient config --name source \
+    https://chromium.googlesource.com/v8/v8.git
+  gclient sync \
+    --jobs "$BUILD_JOBS" \
+    --no-history \
+    --shallow \
+    --revision "source@$(git -C "$SOURCE_DIR" rev-parse HEAD)"
+
+  cd "$SOURCE_DIR"
+  gn gen "$BUILD_DIR" --export-compile-commands --args='is_debug=false
+    symbol_level=0
+    v8_symbol_level=0
+    is_component_build=false
+    v8_monolithic=true
+    v8_use_external_startup_data=false
+    v8_enable_i18n_support=false
+    clang_use_chrome_plugins=false
+    treat_warnings_as_errors=false
+    use_remoteexec=false
+    cc_wrapper="ccache"'
+  autoninja -C "$BUILD_DIR" v8_generated_cc_files -j "$BUILD_JOBS"
+
+  ruby -rjson -rshellwords -e '
+      root = File.expand_path(ARGV.fetch(0)) + File::SEPARATOR
+      source_root = File.join(root, "src") + File::SEPARATOR
+      seen = {}
+      entries = JSON.parse(File.read(ARGV.fetch(1))).select do |entry|
+        path = File.expand_path(entry.fetch("file"), entry.fetch("directory", root))
+        path.start_with?(source_root) && !seen[path] && (seen[path] = true)
+      end
+      entries.each do |entry|
+        arguments = entry["arguments"] || Shellwords.shellsplit(entry.fetch("command"))
+        arguments.reject! do |argument|
+          argument == "-fdiagnostics-show-inlining-chain" ||
+            argument == "-fno-lifetime-dse" ||
+            argument.start_with?("-fsanitize-ignore-for-ubsan-feature=")
+        end
+        arguments.shift if File.basename(arguments.first) == "ccache"
+        entry.delete("command")
+        entry["arguments"] = arguments
+      end
+      puts JSON.generate(entries)
+    ' "$SOURCE_DIR" "$BUILD_DIR/compile_commands.json" > "$BUILD_DIR/compile_commands.filtered.json"
+  mv "$BUILD_DIR/compile_commands.filtered.json" "$BUILD_DIR/compile_commands.json"
+  test "$(jq length "$BUILD_DIR/compile_commands.json")" -ge 500

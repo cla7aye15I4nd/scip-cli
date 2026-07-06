@@ -116,6 +116,16 @@ jobs:
               echo "Project name $name does not match $config" >&2
               exit 1
             fi
+            build_jobs=$(jq -r '.buildJobs // 4' <<< "$project")
+            if [[ ! "$build_jobs" =~ ^[1-9][0-9]*$ ]]; then
+              echo "$config buildJobs must be a positive integer" >&2
+              exit 1
+            fi
+            timeout_minutes=$(jq -r '.timeoutMinutes // 60' <<< "$project")
+            if [[ ! "$timeout_minutes" =~ ^[1-9][0-9]*$ ]] || ((timeout_minutes > 360)); then
+              echo "$config timeoutMinutes must be an integer from 1 through 360" >&2
+              exit 1
+            fi
             repo_url=$(jq -r .repoUrl <<< "$project")
             commit=$(git ls-remote "$repo_url" HEAD | awk 'NR == 1 { print $1 }')
             config_hash=$(sha256sum "$config" | awk '{ print $1 }')
