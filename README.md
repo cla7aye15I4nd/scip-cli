@@ -12,7 +12,3 @@ target/release/scip-cli index.scip \
   --output-dir site \
   --title repo
 ```
-
-The generated site has no server-side runtime and can be served by any static host.
-
-<https://code.dataisland.org>
