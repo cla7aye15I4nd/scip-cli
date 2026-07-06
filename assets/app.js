@@ -7,7 +7,8 @@
   const OVERSCAN = 60;
   const MAX_FILE_RESULTS = 400;
   const appRoot = new URL("../", document.currentScript.src);
-  const routeMode = appRoot.pathname !== "/";
+  // Hash routes work on every static host without server-side SPA rewrites.
+  const routeMode = true;
   const els = Object.fromEntries([
     "menu", "home-link", "sidebar", "search", "file-list", "file-note", "breadcrumb",
     "stats", "main", "empty", "editor", "code", "doc-panel", "doc-resizer", "doc-state", "doc-content",
