@@ -22,6 +22,12 @@ these repository Actions secrets:
 The workflow then creates or updates the `scip-cli-zlib` Direct Upload project.
 Without those secrets, build and validation still run and deployment is skipped.
 
+The production test deployment is available at
+<https://scip-cli-zlib.pages.dev/>. Create a Cloudflare API token scoped to this
+account with `Account / Cloudflare Pages / Edit`, then store it as
+`CLOUDFLARE_API_TOKEN`. The account ID is stored separately as
+`CLOUDFLARE_ACCOUNT_ID`; do not reuse Wrangler's broad local OAuth token in CI.
+
 ## Build
 
 ```bash
