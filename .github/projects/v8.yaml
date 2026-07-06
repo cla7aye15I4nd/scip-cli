@@ -31,7 +31,8 @@ build: |
     v8_enable_i18n_support=false
     clang_use_chrome_plugins=false
     treat_warnings_as_errors=false
-    use_remoteexec=false'
+    use_remoteexec=false
+    cc_wrapper="ccache"'
   autoninja -C "$BUILD_DIR" v8_generated_cc_files -j "$BUILD_JOBS"
 
   ruby -rjson -rshellwords -e '
@@ -49,6 +50,7 @@ build: |
             argument == "-fno-lifetime-dse" ||
             argument.start_with?("-fsanitize-ignore-for-ubsan-feature=")
         end
+        arguments.shift if File.basename(arguments.first) == "ccache"
         entry.delete("command")
         entry["arguments"] = arguments
       end
@@ -56,14 +58,3 @@ build: |
     ' "$SOURCE_DIR" "$BUILD_DIR/compile_commands.json" > "$BUILD_DIR/compile_commands.filtered.json"
   mv "$BUILD_DIR/compile_commands.filtered.json" "$BUILD_DIR/compile_commands.json"
   test "$(jq length "$BUILD_DIR/compile_commands.json")" -ge 500
-
-  jq '[.[0]]' "$BUILD_DIR/compile_commands.json" > "$BUILD_DIR/compile_commands.debug.json"
-  (
-    cd "$SOURCE_DIR"
-    "$GITHUB_WORKSPACE/bin/scip-clang" \
-      --compdb-path="$BUILD_DIR/compile_commands.debug.json" \
-      --index-output-path="$RUNNER_TEMP/v8-debug.scip" \
-      --jobs=1 \
-      --show-compiler-diagnostics \
-      --no-progress-report
-  ) || true
