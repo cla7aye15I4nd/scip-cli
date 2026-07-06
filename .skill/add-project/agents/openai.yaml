@@ -1,0 +1,4 @@
+interface:
+  display_name: "Add SCIP Project"
+  short_description: "Add and validate a project YAML definition"
+  default_prompt: "Use $add-project to add a small C or C++ repository to SCIP-CLI."
