@@ -162,7 +162,7 @@ jobs:
           python3 -m http.server 8080 --directory site > "$RUNNER_TEMP/http.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid"' EXIT
-          google-chrome --headless --no-sandbox --disable-gpu \
+          timeout --signal=TERM 45s google-chrome --headless --no-sandbox --disable-gpu \
             --virtual-time-budget=5000 --dump-dom \
             "http://127.0.0.1:8080/#/github-com-madler-zlib/$commit/adler32.c?line=0" \
             > "$RUNNER_TEMP/source-dom.html"
