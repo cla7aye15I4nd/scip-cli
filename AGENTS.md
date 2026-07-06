@@ -58,3 +58,4 @@ Also parse every project YAML, syntax-check its embedded `build` block, run Shel
 - Keep README short and user-facing; do not document CI internals there.
 - Publish changes through a focused PR and preserve unrelated worktree changes.
 - Production is the Cloudflare Pages project `scip-cli`, with canonical custom domain `code.dataisland.org`.
+- Production workflows must fail before building when Cloudflare credentials are missing; never silently skip deployment.
