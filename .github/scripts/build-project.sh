@@ -11,9 +11,9 @@ git clone --depth 1 "$repo_url" "$source_dir"
 export SOURCE_DIR="$source_dir"
 export BUILD_DIR="$build_dir"
 export BUILD_JOBS=4
-project_build=".github/projects/$project/build.sh"
-test -x "$project_build"
-"$project_build"
+config=".github/projects/$project.yaml"
+build_command=$(ruby -ryaml -e 'puts YAML.safe_load_file(ARGV[0]).fetch("build")' "$config")
+bash -euo pipefail -c "$build_command"
 
 (
   cd "$source_dir"

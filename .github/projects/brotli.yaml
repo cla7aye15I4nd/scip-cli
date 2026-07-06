@@ -1,0 +1,4 @@
+name: brotli
+repoUrl: https://github.com/google/brotli.git
+build: |
+  exec .github/scripts/build-cmake-project.sh -DBROTLI_DISABLE_TESTS=ON

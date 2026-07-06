@@ -1,0 +1,4 @@
+name: zlib
+repoUrl: https://github.com/madler/zlib.git
+build: |
+  exec .github/scripts/build-cmake-project.sh

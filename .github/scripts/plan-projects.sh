@@ -2,7 +2,13 @@
 set -euo pipefail
 
 projects='[]'
-while IFS= read -r project; do
+while IFS= read -r config; do
+  project=$(ruby -ryaml -rjson -e 'data = YAML.safe_load_file(ARGV[0]); data.delete("build"); puts JSON.generate(data)' "$config")
+  name=$(jq -r .name <<< "$project")
+  if [[ "${config##*/}" != "$name.yaml" ]]; then
+    echo "Project name $name does not match $config" >&2
+    exit 1
+  fi
   repo_url=$(jq -r .repoUrl <<< "$project")
   build=true
   if [[ "${EVENT_NAME:-}" == schedule && -s previous-site/generated/catalog.json ]]; then
@@ -18,9 +24,7 @@ while IFS= read -r project; do
   if [[ "$build" == true ]]; then
     projects=$(jq --compact-output --argjson project "$project" '. + [$project]' <<< "$projects")
   fi
-done < <(find .github/projects -mindepth 2 -maxdepth 2 -name project.json -type f -print0 \
-  | sort -z \
-  | xargs -0 -n1 jq --compact-output '.')
+done < <(find .github/projects -mindepth 1 -maxdepth 1 -name '*.yaml' -type f | sort)
 
 echo "projects=$projects" >> "$GITHUB_OUTPUT"
 echo "count=$(jq 'length' <<< "$projects")" >> "$GITHUB_OUTPUT"

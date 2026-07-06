@@ -1,0 +1,8 @@
+name: freetype
+repoUrl: https://gitlab.freedesktop.org/freetype/freetype.git
+build: |
+  exec .github/scripts/build-cmake-project.sh \
+    -DFT_DISABLE_BROTLI=ON \
+    -DFT_DISABLE_BZIP2=ON \
+    -DFT_DISABLE_HARFBUZZ=ON \
+    -DFT_DISABLE_PNG=ON

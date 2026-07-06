@@ -1,0 +1,4 @@
+name: libpng
+repoUrl: https://github.com/pnggroup/libpng.git
+build: |
+  exec .github/scripts/build-cmake-project.sh
