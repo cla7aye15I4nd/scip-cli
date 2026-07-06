@@ -2,6 +2,8 @@ name: Build code browser
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "23 4 * * 0"
   pull_request:
     paths:
       - ".github/workflows/code-browser.yml"
@@ -23,6 +25,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: read
   contents: read
   deployments: write
 
@@ -40,6 +43,23 @@ jobs:
     steps:
       - name: Check out scip-cli
         uses: actions/checkout@v6
+
+      - name: Restore previous production site
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          run_id=$(gh run list \
+            --workflow code-browser.yml \
+            --branch main \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId // empty')
+          if [[ -n "$run_id" ]]; then
+            gh run download "$run_id" --name code-browser-state --dir site
+          else
+            echo "No previous production site is available yet"
+          fi
 
       - name: Install system dependencies
         run: |
@@ -102,6 +122,19 @@ jobs:
             index_path="$RUNNER_TEMP/indexes/$project.scip"
             mkdir -p "$build_dir" "$(dirname "$index_path")"
             git clone --depth 1 "$repo_url" "$source_dir"
+            commit=$(git -C "$source_dir" rev-parse HEAD)
+            if [[ "$project" == zlib ]]; then
+              echo "$commit" > "$RUNNER_TEMP/zlib-commit"
+            fi
+            if [[ "${{ github.event_name }}" == schedule ]] \
+              && jq --exit-status \
+                --arg repo_url "$repo_url" \
+                --arg commit "$commit" \
+                '.projects[] | select(.repoUrl == $repo_url) | .commits[] | select(.commit == $commit)' \
+                site/generated/catalog.json > /dev/null 2>&1; then
+              echo "$project is already indexed at $commit"
+              continue
+            fi
 
             if [[ "$project" == nginx ]]; then
               (
@@ -140,16 +173,12 @@ jobs:
             )
             test "$(stat -c %s "$index_path")" -ge 1024
 
-            commit=$(git -C "$source_dir" rev-parse HEAD)
             target/release/scip-cli "$index_path" \
               --source-root "$source_dir" \
               --repo-url "$repo_url" \
               --commit "$commit" \
               --output-dir site \
               --title "$project"
-            if [[ "$project" == zlib ]]; then
-              echo "$commit" > "$RUNNER_TEMP/zlib-commit"
-            fi
           done
 
       - name: Validate site
@@ -175,15 +204,24 @@ jobs:
             > "$RUNNER_TEMP/source-dom.html"
           grep --quiet "compute the Adler-32 checksum" "$RUNNER_TEMP/source-dom.html"
 
-      - name: Keep a short-lived test artifact
+      - name: Keep a short-lived preview artifact
+        if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: code-browser
+          name: code-browser-preview
           path: site
           retention-days: 1
 
+      - name: Keep production state
+        if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-browser-state
+          path: site
+          retention-days: 14
+
       - name: Deploy to Cloudflare Pages
-        if: github.event_name == 'push' && env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != ''
+        if: github.event_name != 'pull_request' && env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != ''
         uses: cloudflare/wrangler-action@v3
         with:
           accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
@@ -192,5 +230,5 @@ jobs:
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Report skipped Cloudflare deployment
-        if: github.event_name == 'push' && (env.CLOUDFLARE_ACCOUNT_ID == '' || env.CLOUDFLARE_API_TOKEN == '')
+        if: github.event_name != 'pull_request' && (env.CLOUDFLARE_ACCOUNT_ID == '' || env.CLOUDFLARE_API_TOKEN == '')
         run: echo "::warning::Cloudflare deployment skipped because its repository secrets are not configured."

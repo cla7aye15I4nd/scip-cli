@@ -10,6 +10,7 @@ use serde::Serialize;
 use url::Url;
 
 const DEFINITION_ROLE: i32 = 1;
+const RETAINED_COMMITS: usize = 2;
 
 pub struct BuildOptions {
     pub input: PathBuf,
@@ -227,7 +228,7 @@ pub fn build(options: BuildOptions) -> Result<BuildReport> {
     };
     write_json(&staging.join("manifest.json"), &manifest)?;
     publish_directory(&staging, &generated)?;
-    update_catalog(
+    let retained_commits = update_catalog(
         &options.web_root,
         &repo_slug,
         &options.repo_url,
@@ -236,7 +237,7 @@ pub fn build(options: BuildOptions) -> Result<BuildReport> {
         index.documents.len(),
         occurrence_count,
     )?;
-    prune_old_commits(&project_root, &options.commit)?;
+    prune_old_commits(&project_root, &retained_commits)?;
 
     Ok(BuildReport {
         files: index.documents.len(),
@@ -388,7 +389,7 @@ fn publish_directory(staging: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-fn prune_old_commits(project_root: &Path, current_commit: &str) -> Result<()> {
+fn prune_old_commits(project_root: &Path, retained_commits: &[String]) -> Result<()> {
     let entries = match fs::read_dir(project_root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -400,7 +401,9 @@ fn prune_old_commits(project_root: &Path, current_commit: &str) -> Result<()> {
     for entry in entries {
         let entry = entry?;
         if entry.file_type()?.is_dir()
-            && entry.file_name() != current_commit
+            && !retained_commits
+                .iter()
+                .any(|commit| entry.file_name() == commit.as_str())
             && !entry.file_name().to_string_lossy().starts_with('.')
         {
             fs::remove_dir_all(entry.path()).with_context(|| {
@@ -423,7 +426,7 @@ fn update_catalog(
     title: &str,
     file_count: usize,
     occurrence_count: usize,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     let path = web_root.join("generated/catalog.json");
     let mut catalog: Catalog = match fs::read(&path) {
         Ok(bytes) => serde_json::from_slice(&bytes)
@@ -462,10 +465,17 @@ fn update_catalog(
         file_count,
         occurrence_count,
     };
-    project.commits.clear();
-    project.commits.push(entry);
+    project.commits.retain(|item| item.commit != commit);
+    project.commits.insert(0, entry);
+    project.commits.truncate(RETAINED_COMMITS);
+    let retained_commits = project
+        .commits
+        .iter()
+        .map(|item| item.commit.clone())
+        .collect();
     catalog.projects.sort_by(|a, b| a.slug.cmp(&b.slug));
-    write_json_atomic(&path, &catalog)
+    write_json_atomic(&path, &catalog)?;
+    Ok(retained_commits)
 }
 
 fn validate_route_segment(value: &str, name: &str) -> Result<()> {
@@ -817,7 +827,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_keeps_only_the_most_recently_generated_revision() {
+    fn catalog_keeps_the_two_most_recently_generated_revisions() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("generated")).unwrap();
 
@@ -857,18 +867,21 @@ mod tests {
                 .unwrap();
         assert_eq!(catalog.projects[0].commits[0].commit, "aaa");
         assert_eq!(catalog.projects[0].commits[0].file_count, 5);
-        assert_eq!(catalog.projects[0].commits.len(), 1);
+        assert_eq!(catalog.projects[0].commits[1].commit, "bbb");
+        assert_eq!(catalog.projects[0].commits.len(), 2);
     }
 
     #[test]
     fn removes_old_commit_directories() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("old")).unwrap();
+        fs::create_dir_all(root.path().join("previous")).unwrap();
         fs::create_dir_all(root.path().join("current")).unwrap();
 
-        prune_old_commits(root.path(), "current").unwrap();
+        prune_old_commits(root.path(), &["current".to_owned(), "previous".to_owned()]).unwrap();
 
         assert!(!root.path().join("old").exists());
+        assert!(root.path().join("previous").is_dir());
         assert!(root.path().join("current").is_dir());
     }
 
@@ -909,7 +922,7 @@ mod tests {
         fs::write(&input, index.write_to_bytes().unwrap()).unwrap();
 
         build(BuildOptions {
-            input,
+            input: input.clone(),
             source_root: None,
             web_root: web_root.clone(),
             repo_url: "https://example.com/repo.git".to_owned(),
@@ -924,6 +937,25 @@ mod tests {
         assert!(!generated.join("manifest.js").exists());
         assert!(!generated.join("files/0.js").exists());
         assert!(!web_root.join("generated/catalog.js").exists());
+
+        build(BuildOptions {
+            input,
+            source_root: None,
+            web_root: web_root.clone(),
+            repo_url: "https://example.com/repo.git".to_owned(),
+            commit: "def456".to_owned(),
+            title: "Repo".to_owned(),
+        })
+        .unwrap();
+
+        let project_root = web_root.join("generated/example-com-repo");
+        assert!(project_root.join("abc123/manifest.json").is_file());
+        assert!(project_root.join("def456/manifest.json").is_file());
+        let catalog: Catalog =
+            serde_json::from_slice(&fs::read(web_root.join("generated/catalog.json")).unwrap())
+                .unwrap();
+        assert_eq!(catalog.projects[0].commits[0].commit, "def456");
+        assert_eq!(catalog.projects[0].commits[1].commit, "abc123");
     }
 
     #[test]
