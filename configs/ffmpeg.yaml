@@ -1,9 +1,0 @@
-extends: bases/configure-make.yaml
-
-name: ffmpeg
-description: FFmpeg multimedia libraries and programs
-
-repository:
-  url: https://github.com/FFmpeg/FFmpeg.git
-  directory: ffmpeg
-  depth: 1

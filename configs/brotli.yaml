@@ -1,9 +1,0 @@
-extends: bases/cmake-ninja.yaml
-name: brotli
-description: Brotli compression library used by Chromium
-repository:
-  url: https://github.com/google/brotli.git
-  directory: brotli
-  depth: 1
-variables:
-  cmake_args: -DCMAKE_BUILD_TYPE=Release

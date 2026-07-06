@@ -1,9 +1,0 @@
-extends: bases/cmake-ninja.yaml
-name: opus
-description: Opus audio codec used by Chromium and WebRTC
-repository:
-  url: https://github.com/xiph/opus.git
-  directory: opus
-  depth: 1
-variables:
-  cmake_args: -DCMAKE_BUILD_TYPE=Release

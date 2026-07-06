@@ -1,6 +1,6 @@
-# scip-cli html
+# scip-cli
 
-`scip-cli html` adds a [SCIP](https://github.com/scip-code/scip) index and its
+`scip-cli` adds a [SCIP](https://github.com/scip-code/scip) index and its
 source tree to a shared static code browser. Symbol occurrences link directly
 to their definitions, including definitions in other files. Repeated runs add
 repositories or replace their currently published commit in the same `web/`
@@ -18,15 +18,14 @@ The browser has two route types:
 ## Build and run
 
 ```bash
-cargo build --release --bin scip-cli
+cargo build --release --locked --bin scip-cli
 
-./target/release/scip-cli html \
-  examples/harfbuzz/index.scip \
-  --source-root examples/harfbuzz \
-  --repo-url https://github.com/harfbuzz/harfbuzz \
-  --commit 8f08f1d \
-  --web-root web \
-  --title HarfBuzz
+./target/release/scip-cli index.scip \
+  --source-root /path/to/zlib \
+  --repo-url https://github.com/madler/zlib.git \
+  --commit e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca \
+  --output-dir site \
+  --title zlib
 ```
 
 The source root can be omitted when the SCIP metadata contains an accessible
@@ -35,7 +34,7 @@ The source root can be omitted when the SCIP metadata contains an accessible
 Serve the directory over HTTP during development or deployment:
 
 ```bash
-python3 -m http.server --directory web 8080
+python3 -m http.server --directory site 8080
 ```
 
 Then open `http://localhost:8080/`. Generated source data is JSON loaded on
@@ -49,13 +48,13 @@ special extension settings.
 ## CLI
 
 ```text
-Usage: scip-cli html [OPTIONS] --repo-url <REPO_URL> --commit <COMMIT> <INDEX.SCIP>
+Usage: scip-cli [OPTIONS] --repo-url <REPO_URL> --commit <COMMIT> <INDEX.SCIP>
 
 Options:
   -r, --source-root <SOURCE_ROOT>  Repository root containing indexed files
       --repo-url <REPO_URL>        Canonical repository URL
       --commit <COMMIT>            Indexed commit or stable revision
-      --web-root <WEB_ROOT>        Shared web application [default: web]
+  -o, --output-dir <OUTPUT_DIR>    Static site output directory [default: site]
       --title <TITLE>              Browser title [default: SCIP source browser]
   -h, --help                       Print help
   -V, --version                    Print version
@@ -64,7 +63,7 @@ Options:
 Existing projects and unrelated files are preserved. The generated layout is:
 
 ```text
-web/
+site/
 ├── index.html
 ├── 404.html
 ├── _redirects
@@ -73,8 +72,8 @@ web/
 │   └── style.css
 └── generated/
     ├── catalog.json
-    └── github-com-harfbuzz-harfbuzz/
-        └── 8f08f1d/
+    └── github-com-madler-zlib/
+        └── e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca/
             ├── manifest.json
             └── files/
                 ├── 0.json
@@ -85,8 +84,8 @@ The root page lists all generated repositories and their current commits. Projec
 URLs use static-host-compatible hash routes:
 
 ```text
-/#/github-com-harfbuzz-harfbuzz/8f08f1d/
-/#/github-com-harfbuzz-harfbuzz/8f08f1d/src/hb-buffer.cc?line=120
+/#/github-com-madler-zlib/e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca/
+/#/github-com-madler-zlib/e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca/deflate.c?line=120
 ```
 
 No host-level fallback or rewrite is required. `_redirects` and `404.html` are
