@@ -59,5 +59,6 @@ Also parse every project YAML, syntax-check its embedded `build` block, run Shel
 - Keep README short and user-facing; do not document CI internals there.
 - Publish changes through a focused PR and preserve unrelated worktree changes.
 - Production is the Cloudflare Pages project `scip-cli`, with canonical custom domain `code.dataisland.org`.
-- Project packs are public immutable R2 objects under `data.code.dataisland.org`; configure CORS for `https://code.dataisland.org` and `https://scip-cli.pages.dev` with the `Range` request header exposed.
+- Project packs are immutable R2 objects under `data.code.dataisland.org`, protected by the same multi-domain Cloudflare Access application as `code.dataisland.org`. Never connect the R2 custom domain before the Access policy exists.
+- Configure credentialed CORS from `https://code.dataisland.org`, allow the `Range` request header, and expose `Accept-Ranges`, `Content-Length`, `Content-Range`, and `ETag`.
 - Production workflows must fail before building when Cloudflare credentials or R2 access are missing; never silently skip deployment.
