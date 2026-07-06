@@ -1,0 +1,12 @@
+[
+  {"name":"zlib","repoUrl":"https://github.com/madler/zlib.git"},
+  {"name":"brotli","repoUrl":"https://github.com/google/brotli.git"},
+  {"name":"libpng","repoUrl":"https://github.com/pnggroup/libpng.git"},
+  {"name":"libjpeg-turbo","repoUrl":"https://github.com/libjpeg-turbo/libjpeg-turbo.git"},
+  {"name":"libwebp","repoUrl":"https://github.com/webmproject/libwebp.git"},
+  {"name":"freetype","repoUrl":"https://gitlab.freedesktop.org/freetype/freetype.git"},
+  {"name":"harfbuzz","repoUrl":"https://github.com/harfbuzz/harfbuzz.git"},
+  {"name":"opus","repoUrl":"https://github.com/xiph/opus.git"},
+  {"name":"libtiff","repoUrl":"https://gitlab.com/libtiff/libtiff.git"},
+  {"name":"nginx","repoUrl":"https://github.com/nginx/nginx.git"}
+]
