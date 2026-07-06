@@ -16,9 +16,15 @@
     "code-spacer", "code-window", "status", "position-status", "language-status",
     "view-back", "view-forward", "view-history", "history-list", "clear-history"
   ].map(id => [id, document.getElementById(id)]));
+  const nav = {
+    code: document.getElementById("nav-code"),
+    vulnerabilities: document.getElementById("nav-vulnerabilities")
+  };
   if (routeMode) {
     const home = fileMode ? location.pathname : appRoot.pathname;
     els["home-link"].href = home;
+    nav.code.href = "#/";
+    nav.vulnerabilities.href = "#/vulnerabilities";
   }
 
   let catalog;
@@ -74,14 +80,23 @@
     } catch (_) {
       return { invalid: true };
     }
+    const scopedPage = ["vulnerabilities"].includes(parts[2]) ? parts[2] : "";
+    const globalPage = ["vulnerabilities"].includes(parts[0]) ? parts[0] : "";
+    const page = scopedPage || globalPage || (parts[0] ? "repository" : "repositories");
     return {
-      slug: parts[0] || "",
-      commit: parts[1] || "",
-      filePath: parts.slice(2).join("/"),
+      page,
+      slug: scopedPage || !globalPage ? (parts[0] || "") : "",
+      commit: scopedPage || !globalPage ? (parts[1] || "") : "",
+      filePath: scopedPage ? "" : parts.slice(2).join("/"),
       line: Math.max(0, Number(params.get("line") || 0)),
       character: Math.max(0, Number(params.get("char") || 0)),
       hasCharacter: params.has("char")
     };
+  }
+
+  function setActiveNavigation(page) {
+    nav.code.classList.toggle("active", page === "repository");
+    nav.vulnerabilities.classList.toggle("active", page === "vulnerabilities");
   }
 
   function navigate(url, replace = false) {
@@ -114,6 +129,15 @@
     els.status.classList.add("visible");
     clearTimeout(statusTimer);
     statusTimer = setTimeout(() => els.status.classList.remove("visible"), 2200);
+  }
+
+  function updateContextNavigation() {
+    const available = Boolean(manifest);
+    document.querySelector(".primary-nav").classList.toggle("contextless", !available);
+    if (!available) return;
+    const firstFile = manifest.files[0];
+    nav.code.href = firstFile ? fileUrl(firstFile) : projectRoot();
+    nav.vulnerabilities.href = projectRoot();
   }
 
   function clearFunctionDocs(message = "Choose a source file to view its function documentation.") {
@@ -215,14 +239,14 @@
   }
 
   function isFunctionSymbol(symbol) {
-    return Boolean(symbol) && !symbol.startsWith("local ") && /\([^)]*\)\.$/.test(symbol);
+    return Boolean(symbol) && !symbol.startsWith("local ") && /\\([^)]*\\)\\.$/.test(symbol);
   }
 
   function functionMarkdown(item) {
     const stored = currentData.functionDocs?.[item.symbol] ?? currentData.docs?.[item.symbol];
     if (typeof stored === "string") return stored;
     if (stored && typeof stored.markdown === "string") return stored.markdown;
-    return "### Contract\n\n> Documentation has not been generated yet.\n\n### Implementation\n\nPending analysis for this function.\n\n### Possible bugs\n\nNo evidence-backed findings are available.";
+    return "### Source symbol\n\nUse the code view and symbol links to inspect this function.";
   }
 
   function renderFunctionDocs() {
@@ -266,7 +290,11 @@
       const signature = document.createElement("pre");
       signature.className = "doc-signature";
       signature.textContent = item.signature;
-      article.append(link, signature, renderMarkdown(functionMarkdown(item)));
+      const body = renderMarkdown(functionMarkdown(item));
+      body.classList.add("function-doc-body");
+      item.article = article;
+      item.body = body;
+      article.append(link, signature, body);
       fragment.append(article);
     }
     els["doc-content"].replaceChildren(fragment);
@@ -352,10 +380,13 @@
   }
 
   function showLanding() {
+    setActiveNavigation("repositories");
+    els.menu.hidden = true;
     manifest = undefined;
     currentProject = "";
     currentId = -1;
     currentData = undefined;
+    updateContextNavigation();
     els.sidebar.hidden = true;
     els["doc-panel"].hidden = true;
     els["view-history"].hidden = true;
@@ -372,13 +403,13 @@
     heroCopy.className = "landing-hero-copy";
     const eyebrow = document.createElement("div");
     eyebrow.className = "landing-eyebrow";
-    eyebrow.textContent = "Semantic source explorer";
+    eyebrow.textContent = "Repository intelligence";
     const title = document.createElement("h1");
-    title.textContent = "Read the code. Follow the meaning.";
+    title.textContent = "Understand every repository.";
     const intro = document.createElement("p");
-    intro.textContent = "Explore indexed repositories with precise symbol navigation, focused function notes, and a history that keeps your place.";
-    const totalFiles = catalog.projects.reduce((sum, project) => sum + project.commits.reduce((count, revision) => count + revision.fileCount, 0), 0);
-    const totalSymbols = catalog.projects.reduce((sum, project) => sum + project.commits.reduce((count, revision) => count + revision.occurrenceCount, 0), 0);
+    intro.textContent = "Search indexed source, follow symbols, and inspect large repositories without turning your browser into an IDE.";
+    const totalFiles = catalog.projects.reduce((sum, project) => sum + (project.commits[0]?.fileCount || 0), 0);
+    const totalSymbols = catalog.projects.reduce((sum, project) => sum + (project.commits[0]?.occurrenceCount || 0), 0);
     const metrics = document.createElement("div");
     metrics.className = "landing-metrics";
     for (const [value, label] of [
@@ -401,7 +432,7 @@
     const sectionTitle = document.createElement("h2");
     sectionTitle.textContent = "Browse repositories";
     const sectionHint = document.createElement("p");
-    sectionHint.textContent = "Select a revision to open its source tree.";
+    sectionHint.textContent = "Open the latest generated source index.";
     sectionHead.append(sectionTitle, sectionHint);
     const projects = document.createElement("div");
     projects.className = "project-grid";
@@ -423,26 +454,25 @@
       nameWrap.append(name, origin);
       const count = document.createElement("span");
       count.className = "revision-count";
-      count.textContent = `${project.commits.length} revision${project.commits.length === 1 ? "" : "s"}`;
+      count.textContent = project.commits[0] ? `${project.commits[0].fileCount.toLocaleString()} files` : "Not indexed";
       cardHead.append(mark, nameWrap, count);
       card.append(cardHead);
-      for (const revision of project.commits) {
+      const revision = project.commits[0];
+      if (revision) {
         const link = document.createElement("a");
         link.className = "commit-link";
         link.href = `${routeMode ? "#/" : "/"}${encodeURIComponent(project.slug)}/${encodeURIComponent(revision.commit)}/`;
-        const commit = document.createElement("code");
-        commit.textContent = revision.commit;
         const commitCopy = document.createElement("span");
         commitCopy.className = "commit-copy";
         const revisionTitle = document.createElement("strong");
-        revisionTitle.textContent = revision.title || "Indexed revision";
+        revisionTitle.textContent = "Open findings";
         const meta = document.createElement("span");
         meta.textContent = `${revision.fileCount.toLocaleString()} files · ${revision.occurrenceCount.toLocaleString()} symbols`;
         commitCopy.append(revisionTitle, meta);
         const arrow = document.createElement("span");
         arrow.className = "commit-arrow";
         arrow.textContent = "→";
-        link.append(commit, commitCopy, arrow);
+        link.append(commitCopy, arrow);
         card.append(link);
       }
       projects.append(card);
@@ -452,7 +482,91 @@
     els.stats.textContent = `${catalog.projects.length.toLocaleString()} projects`;
     els["position-status"].textContent = "Ln 1, Col 1";
     els["language-status"].textContent = "SCIP";
-    document.title = "SCIP source browser";
+    document.title = "Repositories · EXP";
+  }
+
+  function prepareStandalonePage(page, breadcrumb, title) {
+    setActiveNavigation(page);
+    els.menu.hidden = true;
+    currentId = -1;
+    currentData = undefined;
+    clearFunctionDocs();
+    els.sidebar.hidden = true;
+    els["doc-panel"].hidden = true;
+    els["view-history"].hidden = true;
+    els.editor.hidden = true;
+    els.main.parentElement.classList.add("landing-mode");
+    els.empty.hidden = false;
+    els.empty.className = "empty landing";
+    els.empty.replaceChildren();
+    els.breadcrumb.textContent = manifest ? `${repositoryLabel(manifest.repoSlug)} / ${breadcrumb}` : breadcrumb;
+    els.stats.textContent = "";
+    document.title = `${title} · EXP`;
+    const pageRoot = document.createElement("section");
+    pageRoot.className = "product-page";
+    els.empty.append(pageRoot);
+    return pageRoot;
+  }
+
+  function appendPageHero(root, eyebrowText, titleText, description, action) {
+    const hero = document.createElement("header");
+    hero.className = "page-hero";
+    const copy = document.createElement("div");
+    const eyebrow = document.createElement("div");
+    eyebrow.className = "page-eyebrow";
+    eyebrow.textContent = eyebrowText;
+    const title = document.createElement("h1");
+    title.textContent = titleText;
+    const intro = document.createElement("p");
+    intro.textContent = description;
+    copy.append(eyebrow, title, intro);
+    hero.append(copy);
+    if (action) hero.append(action);
+    root.append(hero);
+  }
+
+  function metricCard(label, value, tone = "") {
+    const card = document.createElement("div");
+    card.className = `metric-card ${tone}`.trim();
+    const name = document.createElement("span");
+    name.textContent = label;
+    const number = document.createElement("strong");
+    number.textContent = typeof value === "number" ? value.toLocaleString() : String(value);
+    card.append(name, number);
+    return card;
+  }
+
+  function repositoryLabel(slug) {
+    const project = catalog?.projects?.find(item => item.slug === slug);
+    return project?.repoUrl?.replace(/\/$/, "").split("/").pop() || slug || "Unknown repository";
+  }
+
+
+  function showVulnerabilities() {
+    const root = prepareStandalonePage("vulnerabilities", "Findings", "Findings");
+    appendPageHero(
+      root,
+      repositoryLabel(manifest?.repoSlug),
+      "Repository overview",
+      `Browse the latest indexed revision, inspect its source, and review findings when verified data is available. ${manifest?.repoUrl || ""}`
+    );
+    const metrics = document.createElement("div");
+    metrics.className = "metric-grid";
+    metrics.append(
+      metricCard("Indexed files", manifest?.fileCount || 0),
+      metricCard("Symbol links", manifest?.occurrenceCount || 0),
+      metricCard("Indexed commit", manifest?.commit?.slice(0, 12) || "—"),
+      metricCard("Findings", 0)
+    );
+    root.append(metrics);
+    const empty = document.createElement("div");
+    empty.className = "empty-state findings-empty";
+    empty.textContent = "No verified findings are available for this repository.";
+    root.append(empty);
+  }
+
+  function refreshStandalonePage() {
+    if (catalog && parseRoute().page === "vulnerabilities") showVulnerabilities();
   }
 
   function renderFileList(query = "") {
@@ -626,27 +740,24 @@
     els.code.scrollTop = (selected + 0.5) * LINE_HEIGHT - els.code.clientHeight / 2;
   }
 
-  function showProjectHome() {
-    currentId = -1;
-    currentData = undefined;
-    clearFunctionDocs();
-    els.editor.hidden = true;
-    els.empty.hidden = false;
-    els.empty.className = "empty";
-    els.empty.textContent = "Choose a file to browse its source.";
-    els.breadcrumb.textContent = `${manifest.repoUrl} · ${manifest.commit}`;
-    document.title = `${manifest.title} · ${manifest.commit}`;
-    els["position-status"].textContent = "Ln 1, Col 1";
-    els["language-status"].textContent = "SCIP";
-    renderFileList(els.search.value);
-  }
-
   async function openRoute() {
     const target = parseRoute();
-    if (target.invalid || !target.slug) {
+    if (target.invalid || target.page === "repositories") {
       showLanding();
       return;
     }
+    if (["vulnerabilities"].includes(target.page) && !target.slug) {
+      const project = catalog.projects.find(item => /ffmpeg/i.test(item.repoUrl)) || catalog.projects[0];
+      const revision = project?.commits[0];
+      if (!project || !revision) {
+        showLanding();
+        return;
+      }
+      navigate(`${routeMode ? "#/" : "/"}${encodeURIComponent(project.slug)}/${encodeURIComponent(revision.commit)}/${target.page}`, true);
+      return;
+    }
+    setActiveNavigation(target.page);
+    els.menu.hidden = false;
     const project = catalog.projects.find(item => item.slug === target.slug);
     const revision = project?.commits.find(item => item.commit === target.commit);
     if (!project || !revision) {
@@ -656,7 +767,7 @@
       els.editor.hidden = true;
       els.empty.hidden = false;
       els.empty.className = "empty";
-      els.empty.textContent = "This repository or commit is not in the generated catalog.";
+      els.empty.textContent = "This repository version is not in the generated catalog.";
       return;
     }
     try {
@@ -678,11 +789,21 @@
         els.main.parentElement.classList.remove("landing-mode");
         els.stats.textContent = `${manifest.fileCount.toLocaleString()} files · ${manifest.occurrenceCount.toLocaleString()} symbols`;
         renderFileList();
+        updateContextNavigation();
       }
-      if (!target.filePath) {
-        showProjectHome();
+      updateContextNavigation();
+      if (target.page === "vulnerabilities") {
+        showVulnerabilities();
         return;
       }
+      if (!target.filePath) {
+        showVulnerabilities();
+        return;
+      }
+      els.sidebar.hidden = false;
+      els["doc-panel"].hidden = false;
+      els["view-history"].hidden = false;
+      els.main.parentElement.classList.remove("landing-mode");
       const file = manifest.files.find(item => item.path === target.filePath);
       if (!file) throw new Error("file is not present in this index");
       if (file.id !== currentId) {
