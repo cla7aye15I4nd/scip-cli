@@ -13,7 +13,7 @@
 - `.github/workflows/project-build.yml`: reusable workflow for one project.
 - `.github/scripts/`: shared CI mechanics; never add project-name `case` statements here.
 
-The assembler restores the previous production artifact, merges project fragments, and retains at most the latest two commits per repository. Production state is retained for 14 days and refreshed weekly. Scheduled runs should skip unchanged upstream commits.
+The planner compares every upstream HEAD with the previous production catalog and does not spawn a build when that commit is already indexed. The assembler restores the previous production artifact, merges project fragments, and retains at most the latest two commits per repository. Production state is retained for 14 days and refreshed weekly.
 
 ## Project definitions
 

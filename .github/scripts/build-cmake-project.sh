@@ -6,6 +6,8 @@ cmake -S "$SOURCE_DIR" -B "$BUILD_DIR" -G Ninja \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
   -DCMAKE_C_COMPILER=clang \
   -DCMAKE_CXX_COMPILER=clang++ \
+  -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+  -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
   -DBUILD_TESTING=OFF \
   "$@"
 cmake --build "$BUILD_DIR" --parallel "$BUILD_JOBS"

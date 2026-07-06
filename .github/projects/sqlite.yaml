@@ -2,5 +2,5 @@ name: sqlite
 repoUrl: https://github.com/sqlite/sqlite.git
 build: |
   cd "$SOURCE_DIR"
-  ./configure --disable-shared --disable-readline
+  CC="ccache clang" ./configure --disable-shared --disable-readline
   bear --output "$BUILD_DIR/compile_commands.json" -- make -j"$BUILD_JOBS"

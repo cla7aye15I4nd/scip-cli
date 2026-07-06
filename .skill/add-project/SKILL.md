@@ -65,3 +65,5 @@ Publish a focused draft PR. Inspect the named matrix job for the new project. Fi
 - Chrome source-render smoke test
 
 After merging, let the main workflow produce `code-browser-state`. Confirm the production catalog contains the project and source text renders before declaring completion.
+
+The planner skips any upstream commit already present in the production catalog. Use the manual `force_rebuild` workflow input only when converter or build-definition changes must regenerate an unchanged upstream commit.
