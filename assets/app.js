@@ -324,7 +324,7 @@
     const sectionTitle = document.createElement("h2");
     sectionTitle.textContent = "Browse repositories";
     const sectionHint = document.createElement("p");
-    sectionHint.textContent = "Open the latest generated source index.";
+    sectionHint.textContent = "Open the latest or previous generated source index.";
     sectionHead.append(sectionTitle, sectionHint);
     const projects = document.createElement("div");
     projects.className = "project-grid";
@@ -349,24 +349,23 @@
       count.textContent = project.commits[0] ? `${project.commits[0].fileCount.toLocaleString()} files` : "Not indexed";
       cardHead.append(mark, nameWrap, count);
       card.append(cardHead);
-      const revision = project.commits[0];
-      if (revision) {
+      project.commits.forEach((revision, index) => {
         const link = document.createElement("a");
         link.className = "commit-link";
         link.href = `${routeMode ? "#/" : "/"}${encodeURIComponent(project.slug)}/${encodeURIComponent(revision.commit)}/`;
         const commitCopy = document.createElement("span");
         commitCopy.className = "commit-copy";
         const revisionTitle = document.createElement("strong");
-        revisionTitle.textContent = "Browse source";
+        revisionTitle.textContent = index === 0 ? "Latest" : "Previous";
         const meta = document.createElement("span");
-        meta.textContent = `${revision.fileCount.toLocaleString()} files · ${revision.occurrenceCount.toLocaleString()} symbols`;
+        meta.textContent = `${revision.commit.slice(0, 12)} · ${revision.fileCount.toLocaleString()} files · ${revision.occurrenceCount.toLocaleString()} symbols`;
         commitCopy.append(revisionTitle, meta);
         const arrow = document.createElement("span");
         arrow.className = "commit-arrow";
         arrow.textContent = "→";
         link.append(commitCopy, arrow);
         card.append(link);
-      }
+      });
       projects.append(card);
     }
     els.empty.append(heading);
@@ -374,7 +373,7 @@
     els.stats.textContent = `${catalog.projects.length.toLocaleString()} projects`;
     els["position-status"].textContent = "Ln 1, Col 1";
     els["language-status"].textContent = "SCIP";
-    document.title = "Repositories · EXP";
+    document.title = "Repositories · Code Browser";
   }
 
   function renderFileList(query = "") {

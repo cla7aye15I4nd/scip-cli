@@ -2,9 +2,11 @@ name: Build code browser
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "23 4 * * 0"
   pull_request:
     paths:
-      - ".github/workflows/code-browser.yml"
+      - ".github/**"
       - "assets/**"
       - "src/**"
       - "Cargo.toml"
@@ -12,17 +14,18 @@ on:
   push:
     branches: [main]
     paths:
-      - ".github/workflows/code-browser.yml"
+      - ".github/**"
       - "assets/**"
       - "src/**"
       - "Cargo.toml"
       - "Cargo.lock"
 
 concurrency:
-  group: code-browser-production
-  cancel-in-progress: false
+  group: code-browser-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
+  actions: read
   contents: read
   deployments: write
 
@@ -30,132 +33,107 @@ env:
   CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
   CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
   PAGES_PROJECT: scip-cli
-  SCIP_CLANG_VERSION: v0.4.0
 
 jobs:
-  build-and-deploy:
+  plan:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
-
+    outputs:
+      projects: ${{ steps.plan.outputs.projects }}
+      count: ${{ steps.plan.outputs.count }}
     steps:
-      - name: Check out scip-cli
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
-      - name: Install system dependencies
+      - name: Restore the previous catalog
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends \
-            bear clang cmake curl libbrotli-dev libfreetype-dev libjpeg-dev \
-            liblzma-dev libpcre2-dev libpng-dev libssl-dev libwebp-dev \
-            ninja-build pkg-config zlib1g-dev
+          run_id=$(gh run list \
+            --workflow code-browser.yml \
+            --branch main \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId // empty')
+          if [[ -n "$run_id" ]]; then
+            gh run download "$run_id" --name code-browser-state --dir previous-site
+          fi
 
+      - name: Select projects
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: .github/scripts/plan-projects.sh
+
+  prepare:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
       - name: Select Rust 1.88
         run: |
           rustup toolchain install 1.88 --profile minimal
           rustup override set 1.88
-
+          rustup component add clippy --toolchain 1.88
       - name: Test and build converter
         run: |
           cargo test --locked --workspace --all-targets
+          cargo clippy --locked --workspace --all-targets -- -D warnings
           cargo build --release --locked --bin scip-cli
+      - name: Share converter
+        uses: actions/upload-artifact@v4
+        with:
+          name: scip-cli-bin
+          path: target/release/scip-cli
+          retention-days: 1
 
-      - name: Download scip-clang
+  build-project:
+    needs: [plan, prepare]
+    if: needs.plan.outputs.count != '0'
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        project: ${{ fromJSON(needs.plan.outputs.projects) }}
+    uses: ./.github/workflows/project-build.yml
+    with:
+      project: ${{ toJSON(matrix.project) }}
+
+  assemble:
+    needs: [plan, prepare, build-project]
+    if: always() && needs.plan.result == 'success' && needs.prepare.result == 'success' && (needs.build-project.result == 'success' || needs.build-project.result == 'skipped')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Restore the previous production site
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          curl --fail --location --retry 3 \
-            --output "$RUNNER_TEMP/scip-clang" \
-            "https://github.com/sourcegraph/scip-clang/releases/download/${SCIP_CLANG_VERSION}/scip-clang-x86_64-linux"
-          chmod 755 "$RUNNER_TEMP/scip-clang"
+          run_id=$(gh run list \
+            --workflow code-browser.yml \
+            --branch main \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId // empty')
+          if [[ -n "$run_id" ]]; then
+            gh run download "$run_id" --name code-browser-state --dir site
+          fi
 
-      - name: Build and index small projects
-        run: |
-          set -euo pipefail
+      - name: Download project fragments
+        if: needs.plan.outputs.count != '0'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: project-*
+          path: incoming
 
-          projects=(
-            zlib
-            brotli
-            libpng
-            libjpeg-turbo
-            libwebp
-            freetype
-            harfbuzz
-            opus
-            libtiff
-            nginx
-          )
-
-          for project in "${projects[@]}"; do
-            case "$project" in
-              zlib) repo_url=https://github.com/madler/zlib.git ;;
-              brotli) repo_url=https://github.com/google/brotli.git ;;
-              libpng) repo_url=https://github.com/pnggroup/libpng.git ;;
-              libjpeg-turbo) repo_url=https://github.com/libjpeg-turbo/libjpeg-turbo.git ;;
-              libwebp) repo_url=https://github.com/webmproject/libwebp.git ;;
-              freetype) repo_url=https://gitlab.freedesktop.org/freetype/freetype.git ;;
-              harfbuzz) repo_url=https://github.com/harfbuzz/harfbuzz.git ;;
-              opus) repo_url=https://github.com/xiph/opus.git ;;
-              libtiff) repo_url=https://gitlab.com/libtiff/libtiff.git ;;
-              nginx) repo_url=https://github.com/nginx/nginx.git ;;
-            esac
-
-            source_dir="$RUNNER_TEMP/sources/$project"
-            build_dir="$RUNNER_TEMP/build/$project"
-            index_path="$RUNNER_TEMP/indexes/$project.scip"
-            mkdir -p "$build_dir" "$(dirname "$index_path")"
-            git clone --depth 1 "$repo_url" "$source_dir"
-
-            if [[ "$project" == nginx ]]; then
-              (
-                cd "$source_dir"
-                CC=clang ./auto/configure --with-cc=clang --with-cc-opt=-O2
-                bear --output "$build_dir/compile_commands.json" -- make -j4
-              )
-            else
-              cmake_args=(
-                -DCMAKE_BUILD_TYPE=Release
-                -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-                -DCMAKE_C_COMPILER=clang
-                -DCMAKE_CXX_COMPILER=clang++
-                -DBUILD_TESTING=OFF
-              )
-              case "$project" in
-                brotli) cmake_args+=(-DBROTLI_DISABLE_TESTS=ON) ;;
-                freetype) cmake_args+=(-DFT_DISABLE_BROTLI=ON -DFT_DISABLE_BZIP2=ON -DFT_DISABLE_HARFBUZZ=ON -DFT_DISABLE_PNG=ON) ;;
-                harfbuzz) cmake_args+=(-DHB_BUILD_SUBSET=OFF) ;;
-                libjpeg-turbo) cmake_args+=(-DWITH_TESTS=OFF) ;;
-                libtiff) cmake_args+=(-Dtiff-tests=OFF -Dtiff-tools=OFF -Dtiff-contrib=OFF -Dtiff-docs=OFF) ;;
-                libwebp) cmake_args+=(-DWEBP_BUILD_EXTRAS=OFF -DWEBP_BUILD_ANIM_UTILS=OFF -DWEBP_BUILD_CWEBP=OFF -DWEBP_BUILD_DWEBP=OFF -DWEBP_BUILD_GIF2WEBP=OFF -DWEBP_BUILD_IMG2WEBP=OFF -DWEBP_BUILD_VWEBP=OFF -DWEBP_BUILD_WEBPINFO=OFF -DWEBP_BUILD_WEBPMUX=OFF) ;;
-                opus) cmake_args+=(-DOPUS_BUILD_TESTING=OFF -DOPUS_BUILD_PROGRAMS=OFF) ;;
-              esac
-              cmake -S "$source_dir" -B "$build_dir" -G Ninja "${cmake_args[@]}"
-              cmake --build "$build_dir" --parallel 4
-            fi
-
-            (
-              cd "$source_dir"
-              "$RUNNER_TEMP/scip-clang" \
-                --compdb-path="$build_dir/compile_commands.json" \
-                --index-output-path="$index_path" \
-                --jobs=4 \
-                --no-progress-report
-            )
-            test "$(stat -c %s "$index_path")" -ge 1024
-
-            commit=$(git -C "$source_dir" rev-parse HEAD)
-            target/release/scip-cli "$index_path" \
-              --source-root "$source_dir" \
-              --repo-url "$repo_url" \
-              --commit "$commit" \
-              --output-dir site \
-              --title "$project"
-            if [[ "$project" == zlib ]]; then
-              echo "$commit" > "$RUNNER_TEMP/zlib-commit"
-            fi
-          done
+      - name: Assemble site
+        run: .github/scripts/assemble-site.sh site incoming
 
       - name: Validate site
         run: |
           test -s site/generated/catalog.json
           test "$(jq '.projects | length' site/generated/catalog.json)" -eq 10
+          test "$(jq '[.projects[].commits | length] | max' site/generated/catalog.json)" -le 2
           file_count=$(find site -type f | wc -l)
           largest_file=$(find site -type f -printf '%s\n' | sort -nr | head -1)
           test "$file_count" -le 20000
@@ -165,7 +143,7 @@ jobs:
 
       - name: Smoke-test source rendering in Chrome
         run: |
-          commit=$(cat "$RUNNER_TEMP/zlib-commit")
+          commit=$(jq -r '.projects[] | select(.slug == "github-com-madler-zlib") | .commits[0].commit' site/generated/catalog.json)
           python3 -m http.server 8080 --directory site > "$RUNNER_TEMP/http.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid"' EXIT
@@ -175,15 +153,24 @@ jobs:
             > "$RUNNER_TEMP/source-dom.html"
           grep --quiet "compute the Adler-32 checksum" "$RUNNER_TEMP/source-dom.html"
 
-      - name: Keep a short-lived test artifact
+      - name: Keep preview artifact
+        if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: code-browser
+          name: code-browser-preview
           path: site
           retention-days: 1
 
+      - name: Keep production state
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-browser-state
+          path: site
+          retention-days: 14
+
       - name: Deploy to Cloudflare Pages
-        if: github.event_name == 'push' && env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != ''
+        if: github.event_name != 'pull_request' && env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != ''
         uses: cloudflare/wrangler-action@v3
         with:
           accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
@@ -192,5 +179,5 @@ jobs:
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Report skipped Cloudflare deployment
-        if: github.event_name == 'push' && (env.CLOUDFLARE_ACCOUNT_ID == '' || env.CLOUDFLARE_API_TOKEN == '')
+        if: github.event_name != 'pull_request' && (env.CLOUDFLARE_ACCOUNT_ID == '' || env.CLOUDFLARE_API_TOKEN == '')
         run: echo "::warning::Cloudflare deployment skipped because its repository secrets are not configured."
