@@ -49,6 +49,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Require Cloudflare deployment credentials
+        if: github.event_name != 'pull_request'
+        run: |
+          if [[ -z "$CLOUDFLARE_ACCOUNT_ID" || -z "$CLOUDFLARE_API_TOKEN" ]]; then
+            echo "::error::CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required for production runs."
+            exit 1
+          fi
+
       - name: Restore the previous catalog
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -208,14 +216,10 @@ jobs:
           retention-days: 14
 
       - name: Deploy to Cloudflare Pages
-        if: github.event_name != 'pull_request' && env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != ''
+        if: github.event_name != 'pull_request'
         uses: cloudflare/wrangler-action@v3
         with:
           accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
           apiToken: ${{ env.CLOUDFLARE_API_TOKEN }}
           command: pages deploy site --project-name=${{ env.PAGES_PROJECT }} --branch=main
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Report skipped Cloudflare deployment
-        if: github.event_name != 'pull_request' && (env.CLOUDFLARE_ACCOUNT_ID == '' || env.CLOUDFLARE_API_TOKEN == '')
-        run: echo "::warning::Cloudflare deployment skipped because its repository secrets are not configured."
