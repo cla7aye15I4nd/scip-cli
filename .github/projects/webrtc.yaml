@@ -12,14 +12,18 @@ build: |
   "$depot_tools/update_depot_tools"
   export DEPOT_TOOLS_UPDATE=0
 
+  # WebRTC's DEPS hooks hardcode the solution directory as "src", so expose
+  # the indexed checkout under that name while keeping the real tree at
+  # SOURCE_DIR for scip-clang and scip-cli.
   cd "$RUNNER_TEMP"
-  gclient config --name source \
+  ln -sfn "$SOURCE_DIR" "$RUNNER_TEMP/src"
+  gclient config --name src \
     https://webrtc.googlesource.com/src.git
   gclient sync \
     --jobs "$BUILD_JOBS" \
     --no-history \
     --shallow \
-    --revision "source@$(git -C "$SOURCE_DIR" rev-parse HEAD)"
+    --revision "src@$(git -C "$SOURCE_DIR" rev-parse HEAD)"
 
   cd "$SOURCE_DIR"
   gn gen "$BUILD_DIR" --export-compile-commands --args='is_debug=false
