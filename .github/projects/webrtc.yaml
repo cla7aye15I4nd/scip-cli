@@ -1,0 +1,63 @@
+name: webrtc
+repoUrl: https://webrtc.googlesource.com/src.git
+timeoutMinutes: 180
+buildJobs: 4
+ccacheMaxSize: 1G
+build: |
+  depot_tools="$RUNNER_TEMP/depot_tools"
+  git clone --depth 1 \
+    https://chromium.googlesource.com/chromium/tools/depot_tools.git \
+    "$depot_tools"
+  export PATH="$depot_tools:$PATH"
+  "$depot_tools/update_depot_tools"
+  export DEPOT_TOOLS_UPDATE=0
+
+  # WebRTC's DEPS hooks hardcode the solution directory as "src", so expose
+  # the indexed checkout under that name while keeping the real tree at
+  # SOURCE_DIR for scip-clang and scip-cli.
+  cd "$RUNNER_TEMP"
+  ln -sfn "$SOURCE_DIR" "$RUNNER_TEMP/src"
+  gclient config --name src \
+    https://webrtc.googlesource.com/src.git
+  gclient sync \
+    --jobs "$BUILD_JOBS" \
+    --no-history \
+    --shallow \
+    --revision "src@$(git -C "$SOURCE_DIR" rev-parse HEAD)"
+
+  cd "$SOURCE_DIR"
+  gn gen "$BUILD_DIR" --export-compile-commands --args='is_debug=false
+    symbol_level=0
+    is_component_build=false
+    rtc_include_tests=false
+    rtc_build_examples=false
+    rtc_build_tools=false
+    treat_warnings_as_errors=false
+    use_rtti=true
+    clang_use_chrome_plugins=false
+    use_remoteexec=false
+    cc_wrapper="ccache"'
+  autoninja -C "$BUILD_DIR" webrtc -j "$BUILD_JOBS"
+
+  ruby -rjson -rshellwords -e '
+      root = File.expand_path(ARGV.fetch(0)) + File::SEPARATOR
+      seen = {}
+      entries = JSON.parse(File.read(ARGV.fetch(1))).select do |entry|
+        path = File.expand_path(entry.fetch("file"), entry.fetch("directory", root))
+        path.start_with?(root) && !seen[path] && (seen[path] = true)
+      end
+      entries.each do |entry|
+        arguments = entry["arguments"] || Shellwords.shellsplit(entry.fetch("command"))
+        arguments.reject! do |argument|
+          argument == "-fdiagnostics-show-inlining-chain" ||
+            argument == "-fno-lifetime-dse" ||
+            argument.start_with?("-fsanitize-ignore-for-ubsan-feature=")
+        end
+        arguments.shift if File.basename(arguments.first) == "ccache"
+        entry.delete("command")
+        entry["arguments"] = arguments
+      end
+      puts JSON.generate(entries)
+    ' "$SOURCE_DIR" "$BUILD_DIR/compile_commands.json" > "$BUILD_DIR/compile_commands.filtered.json"
+  mv "$BUILD_DIR/compile_commands.filtered.json" "$BUILD_DIR/compile_commands.json"
+  test "$(jq length "$BUILD_DIR/compile_commands.json")" -ge 500
